@@ -1258,6 +1258,44 @@ app.get('/api/admin/orders', requireAuth, async (req, res) => {
   }
 });
 
+// Export all orders as CSV (one row per order, with an item summary column).
+app.get('/api/admin/orders.csv', requireAuth, async (req, res) => {
+  try {
+    const shopId = await resolveShopId(req);
+    if (!shopId) return res.status(404).json({ error: 'Shop not found' });
+    const { rows } = await pool.query(
+      `SELECT o.id, o.created_at, o.channel, o.source, o.status, o.payment_status, o.payment_method,
+              c.name AS customer_name, c.email AS customer_email, c.phone AS customer_phone,
+              o.subtotal, o.delivery_fee, o.total, o.dispatch_date, o.tracking_number, o.delivery_address,
+              (SELECT string_agg(oi.qty || 'x ' || oi.name_snapshot, '; ')
+                 FROM order_items oi WHERE oi.order_id = o.id) AS items
+       FROM orders o LEFT JOIN customers c ON c.id = o.customer_id
+       WHERE o.shop_id = $1 ORDER BY o.created_at DESC`,
+      [shopId]
+    );
+    const cols = [
+      'id', 'created_at', 'channel', 'source', 'status', 'payment_status', 'payment_method',
+      'customer_name', 'customer_email', 'customer_phone',
+      'subtotal', 'delivery_fee', 'total', 'dispatch_date', 'tracking_number', 'delivery_address', 'items',
+    ];
+    const esc = (v) => {
+      if (v == null) return '';
+      const s = v instanceof Date ? v.toISOString() : String(v);
+      return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+    };
+    const lines = [cols.join(',')];
+    for (const r of rows) lines.push(cols.map((c) => esc(r[c])).join(','));
+    const csv = lines.join('\r\n');
+    const date = new Date().toISOString().slice(0, 10);
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="siamshop-orders-${date}.csv"`);
+    res.send(csv);
+  } catch (err) {
+    console.error('[admin/orders.csv]', err.message);
+    res.status(500).json({ error: 'Failed to export orders' });
+  }
+});
+
 // Full order detail (items + customer + address) for the admin/packing slip.
 app.get('/api/admin/orders/:id', requireAuth, async (req, res) => {
   try {

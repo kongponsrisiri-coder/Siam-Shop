@@ -174,6 +174,22 @@ export default function OrdersSection() {
     load();
   }, []);
 
+  async function exportCsv() {
+    try {
+      const blob = await api.exportOrdersCsv();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `siamshop-orders-${new Date().toISOString().slice(0, 10)}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      setError(e.message);
+    }
+  }
+
   if (selected != null) {
     return (
       <OrderDetail
@@ -186,7 +202,11 @@ export default function OrdersSection() {
 
   return (
     <div>
-      <h2 style={{ marginBottom: 0 }}>Orders</h2>
+      <div className="row" style={{ marginTop: 16 }}>
+        <h2 style={{ margin: 0 }}>Orders</h2>
+        <div className="spacer" />
+        {orders.length > 0 && <button className="btn secondary" onClick={exportCsv}>⬇ Export CSV</button>}
+      </div>
       {loading && <div className="center muted">Loading…</div>}
       {error && <div className="center err">{error}</div>}
       {!loading && !error && (
