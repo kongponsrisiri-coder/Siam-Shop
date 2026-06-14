@@ -47,6 +47,8 @@ export default function TillScreen() {
   const [authed, setAuthed] = useState(false);
   const [checking, setChecking] = useState(true);
   const [catalogue, setCatalogue] = useState([]);
+  const [categories, setCategories] = useState([]);
+  const [categoryId, setCategoryId] = useState(''); // '' = all
   const [basket, setBasket] = useState([]); // {id, name, price, qty, stock_qty}
   const [search, setSearch] = useState('');
   const [payment, setPayment] = useState('cash');
@@ -68,7 +70,12 @@ export default function TillScreen() {
 
   async function loadCatalogue() {
     try {
-      setCatalogue(await api.adminListProducts());
+      const [prods, cats] = await Promise.all([
+        api.adminListProducts(),
+        api.getCategories().catch(() => []),
+      ]);
+      setCatalogue(prods);
+      setCategories(cats || []);
     } catch {
       /* ignore */
     }
@@ -146,11 +153,12 @@ export default function TillScreen() {
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    if (!q) return catalogue;
-    return catalogue.filter((p) =>
-      `${p.name} ${p.name_th || ''} ${p.barcode || ''} ${p.sku || ''}`.toLowerCase().includes(q)
-    );
-  }, [catalogue, search]);
+    return catalogue.filter((p) => {
+      if (categoryId && String(p.category_id) !== String(categoryId)) return false;
+      if (q && !`${p.name} ${p.name_th || ''} ${p.barcode || ''} ${p.sku || ''}`.toLowerCase().includes(q)) return false;
+      return true;
+    });
+  }, [catalogue, search, categoryId]);
 
   async function completeSale() {
     if (basket.length === 0) return;
@@ -207,6 +215,20 @@ export default function TillScreen() {
             onKeyDown={onScanKey}
             autoFocus
           />
+          {categories.length > 0 && (
+            <div className="till-cats">
+              <button className={`till-cat ${categoryId === '' ? 'active' : ''}`} onClick={() => setCategoryId('')}>All</button>
+              {categories.map((c) => (
+                <button
+                  key={c.id}
+                  className={`till-cat ${String(categoryId) === String(c.id) ? 'active' : ''}`}
+                  onClick={() => setCategoryId(c.id)}
+                >
+                  {c.name}
+                </button>
+              ))}
+            </div>
+          )}
           <div className="till-products">
             {filtered.map((p) => (
               <button

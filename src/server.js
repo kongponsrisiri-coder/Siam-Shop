@@ -1338,6 +1338,55 @@ app.post('/api/admin/orders/:id/dispatch', requireAuth, async (req, res) => {
   }
 });
 
+// Cancel an order (e.g. customer never paid). If it was already paid, restore
+// the stock and write refund movements; otherwise just mark it cancelled.
+app.post('/api/admin/orders/:id/cancel', requireAuth, async (req, res) => {
+  const shopId = await resolveShopId(req);
+  if (!shopId) return res.status(404).json({ error: 'Shop not found' });
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const { rows } = await client.query(
+      `SELECT * FROM orders WHERE id = $1 AND shop_id = $2 FOR UPDATE`,
+      [req.params.id, shopId]
+    );
+    const order = rows[0];
+    if (!order) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'Order not found' }); }
+    if (order.status === 'cancelled') { await client.query('ROLLBACK'); return res.json(order); }
+
+    // If it was paid, the stock was decremented — put it back.
+    if (order.payment_status === 'paid') {
+      const { rows: items } = await client.query(
+        `SELECT product_id, qty FROM order_items WHERE order_id = $1`, [order.id]
+      );
+      for (const it of items) {
+        if (!it.product_id) continue;
+        await client.query(
+          `UPDATE products SET stock_qty = stock_qty + $1 WHERE id = $2 AND track_stock = TRUE`,
+          [it.qty, it.product_id]
+        );
+        await client.query(
+          `INSERT INTO stock_movements (shop_id, product_id, change_qty, reason, ref_order_id, staff)
+           VALUES ($1,$2,$3,'refund',$4,$5)`,
+          [shopId, it.product_id, it.qty, order.id, req.auth?.name || 'admin']
+        );
+      }
+      await client.query(`UPDATE orders SET payment_status = 'refunded' WHERE id = $1`, [order.id]);
+    }
+    const { rows: updated } = await client.query(
+      `UPDATE orders SET status = 'cancelled' WHERE id = $1 RETURNING *`, [order.id]
+    );
+    await client.query('COMMIT');
+    res.json(updated[0]);
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('[admin/orders cancel]', err.message);
+    res.status(500).json({ error: 'Failed to cancel order' });
+  } finally {
+    client.release();
+  }
+});
+
 // Mark a (bank-transfer) order paid — fulfils it: decrements stock + emails.
 app.post('/api/admin/orders/:id/mark-paid', requireAuth, async (req, res) => {
   try {

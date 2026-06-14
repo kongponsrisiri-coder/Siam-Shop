@@ -222,7 +222,16 @@ th { color: var(--muted); font-weight: 600; }
 .till-grid {
   flex: 1; display: grid; grid-template-columns: 1fr 380px; gap: 0; min-height: 0;
 }
+.cancel-btn { background: #fff; color: var(--siam-red); border: 1px solid var(--siam-red); }
+.cancel-btn:hover { background: #fee2e2; }
+
 .till-catalogue { display: flex; flex-direction: column; padding: 16px; min-height: 0; }
+.till-cats { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
+.till-cat {
+  border: 1px solid var(--line); background: #fff; border-radius: 999px;
+  padding: 5px 12px; font-size: 12px; font-weight: 600; cursor: pointer; color: var(--ink);
+}
+.till-cat.active { background: var(--siam-red); color: #fff; border-color: var(--siam-red); }
 .till-scan {
   font-size: 18px; padding: 14px 16px; border: 2px solid var(--siam-gold); border-radius: 10px;
 }

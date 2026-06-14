@@ -99,6 +99,8 @@ export const api = {
     }),
   adminMarkPaid: (id) =>
     request(`/api/admin/orders/${id}/mark-paid`, { method: 'POST', authed: true }),
+  adminCancelOrder: (id) =>
+    request(`/api/admin/orders/${id}/cancel`, { method: 'POST', authed: true }),
   // CSV export — fetch with the auth header and return a Blob to download.
   exportOrdersCsv: async () => {
     const res = await fetch(`${API_BASE}/api/admin/orders.csv`, {

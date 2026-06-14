@@ -62,6 +62,21 @@ function OrderDetail({ id, onBack, onChanged }) {
     }
   }
 
+  async function cancel() {
+    if (!confirm('Cancel this order? If it was paid, stock will be restored.')) return;
+    setBusy(true);
+    setError('');
+    try {
+      await api.adminCancelOrder(id);
+      await load();
+      onChanged && onChanged();
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   if (error && !order) return <div className="center err">{error} — <button className="btn ghost" onClick={onBack}>back</button></div>;
   if (!order) return <div className="center muted">Loading…</div>;
 
@@ -142,10 +157,16 @@ function OrderDetail({ id, onBack, onChanged }) {
             <label>Tracking number</label>
             <input value={tracking} onChange={(e) => setTracking(e.target.value)} placeholder="e.g. RM123456789GB" />
           </div>
-          <button className="btn" disabled={busy} onClick={dispatch}>Mark as dispatched</button>
-          {order.payment_method === 'bank_transfer' && order.payment_status !== 'paid' && (
+          {order.status !== 'cancelled' && (
+            <button className="btn" disabled={busy} onClick={dispatch}>Mark as dispatched</button>
+          )}
+          {order.payment_method === 'bank_transfer' && order.payment_status !== 'paid' && order.status !== 'cancelled' && (
             <button className="btn secondary" disabled={busy} onClick={markPaid}>Mark as paid</button>
           )}
+          {order.status !== 'cancelled' && order.status !== 'dispatched' && (
+            <button className="btn cancel-btn" disabled={busy} onClick={cancel}>Cancel order</button>
+          )}
+          {order.status === 'cancelled' && <span className="tag off">Cancelled</span>}
         </div>
       </div>
     </div>
