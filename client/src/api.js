@@ -70,6 +70,7 @@ export const api = {
   createProduct: (p) => request('/api/admin/products', { method: 'POST', body: p, authed: true }),
   updateProduct: (id, p) => request(`/api/admin/products/${id}`, { method: 'PUT', body: p, authed: true }),
   deleteProduct: (id) => request(`/api/admin/products/${id}`, { method: 'DELETE', authed: true }),
+  aiDescribeProduct: (body) => request('/api/admin/products/ai-describe', { method: 'POST', body, authed: true }),
 
   // Admin settings
   adminGetSettings: () => request('/api/admin/settings', { authed: true }),

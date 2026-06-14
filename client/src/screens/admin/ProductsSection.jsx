@@ -25,10 +25,31 @@ const UNITS = ['each', 'kg', 'g', 'pack', 'bottle', 'can', 'box'];
 function ProductForm({ initial, categories, onSave, onCancel }) {
   const [form, setForm] = useState({ ...EMPTY, ...initial });
   const [busy, setBusy] = useState(false);
+  const [aiBusy, setAiBusy] = useState(false);
   const [error, setError] = useState('');
 
   function set(k, v) {
     setForm((f) => ({ ...f, [k]: v }));
+  }
+
+  // SIAMSHOP-008 — fill description (EN+TH), and the English name if missing.
+  async function generate() {
+    setAiBusy(true);
+    setError('');
+    try {
+      const cat = categories.find((c) => String(c.id) === String(form.category_id));
+      const out = await api.aiDescribeProduct({ name: form.name, name_th: form.name_th, category: cat?.name });
+      setForm((f) => ({
+        ...f,
+        name: f.name?.trim() ? f.name : out.name || f.name,
+        description: out.description || f.description,
+        description_th: out.description_th || f.description_th,
+      }));
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setAiBusy(false);
+    }
   }
 
   async function save(e) {
@@ -66,7 +87,13 @@ function ProductForm({ initial, categories, onSave, onCancel }) {
           <input value={form.name_th || ''} onChange={(e) => set('name_th', e.target.value)} />
         </div>
       </div>
-      <label>Description</label>
+      <div className="row" style={{ marginTop: 10 }}>
+        <label style={{ margin: 0 }}>Description</label>
+        <div className="spacer" />
+        <button type="button" className="btn ghost" onClick={generate} disabled={aiBusy || (!form.name && !form.name_th)}>
+          {aiBusy ? '✨ Generating…' : '✨ Generate with AI'}
+        </button>
+      </div>
       <textarea rows="3" value={form.description || ''} onChange={(e) => set('description', e.target.value)} />
       <label>Description (Thai)</label>
       <textarea rows="3" value={form.description_th || ''} onChange={(e) => set('description_th', e.target.value)} />

@@ -151,4 +151,43 @@ async function parseOrderItems(text, catalogue) {
   };
 }
 
-module.exports = { isConfigured, extractInvoice, parseOrderItems };
+// SIAMSHOP-008: generate product copy for the self-service admin. Given a name
+// (English and/or Thai) + category, write a concise appealing English + Thai
+// description, and suggest an English name when only a Thai one was entered.
+const DESCRIBE_SCHEMA = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    name: { type: 'string', description: 'Suggested English name (echo the given one if already English)' },
+    description: { type: 'string', description: 'Appealing English description, 1–2 sentences' },
+    description_th: { type: 'string', description: 'Thai description, 1–2 sentences' },
+  },
+  required: ['name', 'description', 'description_th'],
+};
+
+async function generateProductContent({ name, name_th, category }) {
+  const client = getClient();
+  const message = await client.messages.create({
+    model: 'claude-opus-4-8',
+    max_tokens: 1024,
+    output_config: { format: { type: 'json_schema', schema: DESCRIBE_SCHEMA } },
+    messages: [
+      {
+        role: 'user',
+        content:
+          `Write shop copy for a Thai grocery product sold online in the UK.\n` +
+          `English name: ${name || '(none — suggest one from the Thai name)'}\n` +
+          `Thai name: ${name_th || '(none)'}\n` +
+          `Category: ${category || '(uncategorised)'}\n\n` +
+          `Return a concise, appetising English description and a Thai description ` +
+          `(1–2 sentences each), and an English name (suggest one if only Thai was given, ` +
+          `otherwise echo the English name). Do not invent specific prices, weights, or claims.`,
+      },
+    ],
+  });
+  if (message.stop_reason === 'refusal') throw new Error('Could not generate a description.');
+  const out = message.content.filter((b) => b.type === 'text').map((b) => b.text).join('');
+  return JSON.parse(out);
+}
+
+module.exports = { isConfigured, extractInvoice, parseOrderItems, generateProductContent };

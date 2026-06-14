@@ -6,6 +6,7 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
+    "seed": "node scripts/seed-demo.js",
     "test": "echo \"No tests yet\" && exit 0"
   },
   "author": "Korakot Kongponsrisiri <info@siamepos.co.uk>",

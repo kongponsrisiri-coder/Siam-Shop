@@ -768,6 +768,22 @@ app.put('/api/admin/products/:id', requireAuth, async (req, res) => {
   }
 });
 
+// AI-generate product copy (SIAMSHOP-008) for the self-service admin form.
+app.post('/api/admin/products/ai-describe', requireAuth, async (req, res) => {
+  if (!aiService.isConfigured()) {
+    return res.status(503).json({ error: 'AI descriptions not configured (ANTHROPIC_API_KEY unset).' });
+  }
+  try {
+    const { name, name_th, category } = req.body || {};
+    if (!name && !name_th) return res.status(400).json({ error: 'Enter a product name first' });
+    const content = await aiService.generateProductContent({ name, name_th, category });
+    res.json(content);
+  } catch (err) {
+    console.error('[ai-describe]', err.message);
+    res.status(502).json({ error: err.message });
+  }
+});
+
 app.delete('/api/admin/products/:id', requireAuth, async (req, res) => {
   try {
     const shopId = await resolveShopId(req);
