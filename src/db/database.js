@@ -9,11 +9,18 @@ if (!process.env.DATABASE_URL) {
   console.warn('⚠️  DATABASE_URL is not set — the database will not connect. Set it in .env (local) or Railway Variables.');
 }
 
-// Railway/managed Postgres requires SSL (with certs Node does not trust by
-// default), but a local dev Postgres usually has SSL disabled. Enable SSL only
-// for a remote DATABASE_URL so local development works without extra config.
+// SSL policy: managed/public Postgres needs SSL (with certs Node doesn't trust
+// by default), but local dev AND Railway's private network (*.railway.internal)
+// are plaintext — forcing SSL there throws "server does not support SSL
+// connections". So enable SSL only when it's a remote, non-internal host (and
+// honour an explicit sslmode=disable).
 const _conn = process.env.DATABASE_URL || '';
-const _useSSL = _conn && !/@(localhost|127\.0\.0\.1)/.test(_conn);
+const _noSSL =
+  !_conn ||
+  /@(localhost|127\.0\.0\.1)/.test(_conn) ||
+  /\.railway\.internal/.test(_conn) ||
+  /[?&]sslmode=disable/.test(_conn);
+const _useSSL = Boolean(_conn) && !_noSSL;
 
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
