@@ -4,3 +4,7 @@ node_modules/
 .DS_Store
 client/dist/
 *.log
+
+# Supplier price lists + generated import data (not committed)
+*.xlsx
+scripts/products.json
