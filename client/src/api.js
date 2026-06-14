@@ -66,4 +66,10 @@ export const api = {
   lookupBarcode: (code) => request(`/api/products/lookup?barcode=${encodeURIComponent(code)}`, { authed: true }),
   createSale: (sale) => request('/api/sales', { method: 'POST', body: sale, authed: true }),
   salesSummary: () => request('/api/sales/summary', { authed: true }),
+
+  // Phone scanner — stock operations
+  receiveStock: (body) => request('/api/stock/receive', { method: 'POST', body, authed: true }),
+  stocktake: (body) => request('/api/stock/stocktake', { method: 'POST', body, authed: true }),
+  goodsInBatch: (lines) => request('/api/stock/goods-in-batch', { method: 'POST', body: { lines }, authed: true }),
+  scanInvoice: (body) => request('/api/stock/scan-invoice', { method: 'POST', body, authed: true }),
 };

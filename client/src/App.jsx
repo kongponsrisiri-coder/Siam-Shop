@@ -8,6 +8,7 @@ import CartScreen from './screens/CartScreen.jsx';
 import CheckoutScreen from './screens/CheckoutScreen.jsx';
 import AdminScreen from './screens/admin/AdminScreen.jsx';
 import TillScreen from './screens/TillScreen.jsx';
+import ScannerScreen from './screens/ScannerScreen.jsx';
 
 function TopBar() {
   const { count } = useCart();
@@ -18,6 +19,7 @@ function TopBar() {
         <Link to="/">Shop</Link>
         <Link to="/cart">Cart{count > 0 ? ` (${count})` : ''}</Link>
         <Link to="/till">Till</Link>
+        <Link to="/scan">Scanner</Link>
         <Link to="/admin">Admin</Link>
       </div>
     </div>
@@ -27,8 +29,9 @@ function TopBar() {
 export default function App() {
   return (
     <Routes>
-      {/* The till is a focused full-screen surface with its own header. */}
+      {/* Till and scanner are focused full-screen surfaces with their own headers. */}
       <Route path="/till" element={<TillScreen />} />
+      <Route path="/scan" element={<ScannerScreen />} />
       <Route
         path="*"
         element={

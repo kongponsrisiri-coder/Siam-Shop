@@ -1,0 +1,11 @@
+{
+  "name": "SiamShop Scanner",
+  "short_name": "SiamShop",
+  "description": "Barcode + invoice scanner for SiamShop staff",
+  "start_url": "./scan",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#ffffff",
+  "theme_color": "#c8102e"
+}

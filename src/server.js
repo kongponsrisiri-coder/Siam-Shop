@@ -14,6 +14,7 @@ const fs = require('fs');
 
 const { pool, initDB, getShopIdBySlug } = require('./db/database');
 const stripeService = require('./services/stripeService');
+const aiService = require('./services/aiService');
 
 const app = express();
 
@@ -32,7 +33,8 @@ app.use(
 // The Stripe webhook needs the raw, unparsed body for signature verification,
 // so its raw parser MUST be registered before the global express.json().
 app.use('/api/stripe/webhook', express.raw({ type: 'application/json' }));
-app.use(express.json({ limit: '5mb' }));
+// 20mb: invoice-scan uploads carry a base64 phone photo, which inflates ~33%.
+app.use(express.json({ limit: '20mb' }));
 
 // ---------------------------------------------------------------------------
 // Auth — HMAC Bearer tokens (SiamEPOS SEPOS-047a pattern)
@@ -472,6 +474,218 @@ app.get('/api/sales/summary', requireAuth, async (req, res) => {
   } catch (err) {
     console.error('[sales/summary]', err.message);
     res.status(500).json({ error: 'Failed to load summary' });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Stock operations (SIAMSHOP-202) — used by the phone scanner: goods-in
+// (receiving), stocktake (counting), and batch goods-in (from an invoice).
+// Every change writes a stock_movements row so the ledger is the audit trail.
+// ---------------------------------------------------------------------------
+
+// Resolve a product within a shop by id or barcode using the given client.
+// Returns the row (locked FOR UPDATE) or null.
+async function findProductForUpdate(client, shopId, { product_id, barcode }) {
+  if (product_id) {
+    const { rows } = await client.query(
+      `SELECT * FROM products WHERE id = $1 AND shop_id = $2 FOR UPDATE`,
+      [product_id, shopId]
+    );
+    return rows[0] || null;
+  }
+  if (barcode) {
+    const { rows } = await client.query(
+      `SELECT * FROM products WHERE shop_id = $1 AND barcode = $2 FOR UPDATE`,
+      [shopId, String(barcode).trim()]
+    );
+    return rows[0] || null;
+  }
+  return null;
+}
+
+// Receive stock (goods-in): increment a product's stock and log the movement.
+app.post('/api/stock/receive', requireAuth, async (req, res) => {
+  const shopId = await resolveShopId(req);
+  if (!shopId) return res.status(404).json({ error: 'Shop not found' });
+  const qty = Number(req.body?.qty);
+  if (!Number.isInteger(qty) || qty <= 0) return res.status(400).json({ error: 'qty must be a positive integer' });
+  const staff = req.auth?.name || 'admin';
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const p = await findProductForUpdate(client, shopId, req.body || {});
+    if (!p) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'Product not found' }); }
+    const { rows } = await client.query(
+      `UPDATE products SET stock_qty = stock_qty + $1 WHERE id = $2 RETURNING stock_qty`,
+      [qty, p.id]
+    );
+    await client.query(
+      `INSERT INTO stock_movements (shop_id, product_id, change_qty, reason, note, staff)
+       VALUES ($1,$2,$3,'goods_in',$4,$5)`,
+      [shopId, p.id, qty, req.body?.note || null, staff]
+    );
+    await client.query('COMMIT');
+    res.json({ product_id: p.id, name: p.name, received: qty, stock_qty: rows[0].stock_qty });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('[stock/receive]', err.message);
+    res.status(500).json({ error: 'Failed to receive stock' });
+  } finally {
+    client.release();
+  }
+});
+
+// Stocktake: set a product's stock to a physically-counted value and log the
+// variance (counted − previous) so over/under-counts are auditable.
+app.post('/api/stock/stocktake', requireAuth, async (req, res) => {
+  const shopId = await resolveShopId(req);
+  if (!shopId) return res.status(404).json({ error: 'Shop not found' });
+  const counted = Number(req.body?.counted_qty);
+  if (!Number.isInteger(counted) || counted < 0) return res.status(400).json({ error: 'counted_qty must be a non-negative integer' });
+  const staff = req.auth?.name || 'admin';
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const p = await findProductForUpdate(client, shopId, req.body || {});
+    if (!p) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'Product not found' }); }
+    const previous = p.stock_qty;
+    const variance = counted - previous;
+    await client.query(`UPDATE products SET stock_qty = $1 WHERE id = $2`, [counted, p.id]);
+    if (variance !== 0) {
+      await client.query(
+        `INSERT INTO stock_movements (shop_id, product_id, change_qty, reason, note, staff)
+         VALUES ($1,$2,$3,'stocktake',$4,$5)`,
+        [shopId, p.id, variance, `count ${previous}→${counted}`, staff]
+      );
+    }
+    await client.query('COMMIT');
+    res.json({ product_id: p.id, name: p.name, previous, counted, variance, stock_qty: counted });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('[stock/stocktake]', err.message);
+    res.status(500).json({ error: 'Failed to record stocktake' });
+  } finally {
+    client.release();
+  }
+});
+
+// Batch goods-in — used after an invoice scan. Each line is matched by
+// product_id or barcode; unmatched lines are returned so the user can handle
+// them (e.g. create the product first). Applied atomically.
+app.post('/api/stock/goods-in-batch', requireAuth, async (req, res) => {
+  const shopId = await resolveShopId(req);
+  if (!shopId) return res.status(404).json({ error: 'Shop not found' });
+  const lines = Array.isArray(req.body?.lines) ? req.body.lines : [];
+  if (lines.length === 0) return res.status(400).json({ error: 'No lines' });
+  const staff = req.auth?.name || 'admin';
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const applied = [];
+    const unmatched = [];
+    for (const ln of lines) {
+      const qty = Number(ln.qty);
+      if (!Number.isInteger(qty) || qty <= 0) { unmatched.push({ ...ln, reason: 'bad qty' }); continue; }
+      const p = await findProductForUpdate(client, shopId, ln);
+      if (!p) { unmatched.push({ ...ln, reason: 'no match' }); continue; }
+      const { rows } = await client.query(
+        `UPDATE products SET stock_qty = stock_qty + $1 WHERE id = $2 RETURNING stock_qty`,
+        [qty, p.id]
+      );
+      await client.query(
+        `INSERT INTO stock_movements (shop_id, product_id, change_qty, reason, note, staff)
+         VALUES ($1,$2,$3,'goods_in',$4,$5)`,
+        [shopId, p.id, qty, ln.note || 'invoice', staff]
+      );
+      applied.push({ product_id: p.id, name: p.name, received: qty, stock_qty: rows[0].stock_qty });
+    }
+    await client.query('COMMIT');
+    res.json({ applied, unmatched });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('[stock/goods-in-batch]', err.message);
+    res.status(500).json({ error: 'Failed to apply goods-in' });
+  } finally {
+    client.release();
+  }
+});
+
+// Recent stock movements (the ledger) for a history view.
+app.get('/api/stock/movements', requireAuth, async (req, res) => {
+  try {
+    const shopId = await resolveShopId(req);
+    if (!shopId) return res.status(404).json({ error: 'Shop not found' });
+    const limit = Math.min(Number(req.query.limit) || 50, 200);
+    const { rows } = await pool.query(
+      `SELECT m.id, m.change_qty, m.reason, m.ref_order_id, m.note, m.staff, m.created_at,
+              p.name AS product_name
+       FROM stock_movements m
+       LEFT JOIN products p ON p.id = m.product_id
+       WHERE m.shop_id = $1
+       ORDER BY m.id DESC
+       LIMIT $2`,
+      [shopId, limit]
+    );
+    res.json(rows);
+  } catch (err) {
+    console.error('[stock/movements]', err.message);
+    res.status(500).json({ error: 'Failed to load movements' });
+  }
+});
+
+// AI invoice scanner (SIAMSHOP-203). Photo of a supplier invoice -> Claude
+// extracts line items -> we match each to a product by barcode/name and return
+// the lines for the user to review before applying via /stock/goods-in-batch.
+app.post('/api/stock/scan-invoice', requireAuth, async (req, res) => {
+  if (!aiService.isConfigured()) {
+    return res.status(503).json({ error: 'AI invoice scanning is not configured (ANTHROPIC_API_KEY unset).' });
+  }
+  const shopId = await resolveShopId(req);
+  if (!shopId) return res.status(404).json({ error: 'Shop not found' });
+  let { image_base64, media_type } = req.body || {};
+  if (!image_base64) return res.status(400).json({ error: 'image_base64 is required' });
+  // Tolerate a full data: URL by stripping the prefix.
+  const m = /^data:(image\/[a-z0-9.+-]+);base64,(.*)$/i.exec(image_base64);
+  if (m) {
+    media_type = media_type || m[1];
+    image_base64 = m[2];
+  }
+
+  try {
+    const extracted = await aiService.extractInvoice(image_base64, media_type || 'image/jpeg');
+    const { rows: products } = await pool.query(
+      `SELECT id, name, barcode FROM products WHERE shop_id = $1`,
+      [shopId]
+    );
+    const byBarcode = new Map(products.filter((p) => p.barcode).map((p) => [String(p.barcode), p]));
+
+    const lines = extracted.lines.map((ln) => {
+      let match = null;
+      if (ln.barcode && byBarcode.has(String(ln.barcode))) match = byBarcode.get(String(ln.barcode));
+      if (!match && ln.name) {
+        const lc = String(ln.name).toLowerCase().trim();
+        match =
+          products.find((p) => p.name.toLowerCase() === lc) ||
+          products.find((p) => p.name.toLowerCase().includes(lc) || lc.includes(p.name.toLowerCase())) ||
+          null;
+      }
+      return {
+        name: ln.name,
+        qty: ln.qty,
+        unit_cost: ln.unit_cost ?? null,
+        barcode: ln.barcode ?? null,
+        matched_product_id: match ? match.id : null,
+        matched_name: match ? match.name : null,
+      };
+    });
+
+    res.json({ supplier: extracted.supplier, lines });
+  } catch (err) {
+    console.error('[stock/scan-invoice]', err.message);
+    res.status(502).json({ error: err.message || 'Invoice scan failed' });
   }
 });
 

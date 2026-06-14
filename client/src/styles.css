@@ -147,3 +147,35 @@ th { color: var(--muted); font-weight: 600; }
   .till-grid { grid-template-columns: 1fr; }
   .till-basket { border-left: none; border-top: 1px solid var(--line); }
 }
+
+/* ---------------- Phone scanner (PWA) ---------------- */
+.scanner { max-width: 480px; margin: 0 auto; min-height: 100vh; display: flex; flex-direction: column; background: #fff; }
+.scanner-head { display: flex; align-items: center; padding: 12px 16px; border-bottom: 1px solid var(--line); }
+.scanner-modes { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; padding: 8px; background: var(--bg); }
+.scanner-mode {
+  border: 1px solid var(--line); background: #fff; border-radius: 8px; padding: 8px 4px;
+  font-size: 12px; font-weight: 600; cursor: pointer;
+}
+.scanner-mode.active { background: var(--siam-red); color: #fff; border-color: var(--siam-red); }
+.scanner-body { flex: 1; padding: 16px; overflow-y: auto; }
+
+.scanner-cam { margin-bottom: 16px; }
+.scanner-open { width: 100%; padding: 16px; font-size: 16px; }
+.scanner-video-wrap { position: relative; border-radius: 12px; overflow: hidden; background: #000; }
+.scanner-video { width: 100%; display: block; max-height: 320px; object-fit: cover; }
+.scanner-reticle {
+  position: absolute; inset: 25% 12%; border: 3px solid rgba(242,169,0,0.9); border-radius: 10px; pointer-events: none;
+}
+.scanner-stop { position: absolute; top: 8px; right: 8px; }
+.scanner-hint { position: absolute; bottom: 8px; left: 8px; right: 8px; text-align: center; color: #fff; font-size: 12px; background: rgba(0,0,0,0.5); padding: 4px; border-radius: 6px; }
+
+.scanner-list { display: flex; flex-direction: column; }
+.scanner-foot { position: sticky; bottom: 0; background: #fff; padding-top: 8px; }
+.scanner-log { margin-top: 16px; display: flex; flex-direction: column; gap: 6px; }
+.scanner-log-row { padding: 8px 10px; border-radius: 8px; background: #ecfdf5; font-size: 14px; }
+.scanner-log-row.warn { background: #fffbeb; }
+.scanner-log-row.err { background: #fee2e2; }
+
+.invoice-line { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--line); }
+.invoice-line input[type="checkbox"] { width: auto; }
+.invoice-line.unmatched { opacity: 0.65; }
