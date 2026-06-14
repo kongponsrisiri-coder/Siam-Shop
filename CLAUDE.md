@@ -157,9 +157,12 @@ DATABASE_URL          ← Postgres (auto-set by Railway)
 BREVO_API_KEY         ← same key as SiamEPOS (ask Korakot)
 STRIPE_SECRET_KEY     ← live key from day one (real shop)
 STRIPE_WEBHOOK_SECRET ← set after creating Railway webhook in Stripe Dashboard
-ANTHROPIC_API_KEY     ← for AI product features
+ANTHROPIC_API_KEY     ← AI features (invoice scan, Messenger order parsing)
 AUTH_SECRET           ← HMAC secret for admin tokens (generate: openssl rand -hex 32)
-FRONTEND_URL          ← Netlify URL (for CORS + Stripe redirect)
+FRONTEND_URL          ← Netlify URL (for CORS + Stripe redirect + Messenger cart links)
+MESSENGER_VERIFY_TOKEN     ← any string; must match the FB webhook config
+MESSENGER_APP_SECRET       ← Meta App secret (verifies webhook signature)
+MESSENGER_PAGE_ACCESS_TOKEN ← Page token (send replies via Graph API)
 ```
 
 ---

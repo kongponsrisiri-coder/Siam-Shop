@@ -16,6 +16,7 @@ const { pool, initDB, getShopIdBySlug } = require('./db/database');
 const stripeService = require('./services/stripeService');
 const aiService = require('./services/aiService');
 const delivery = require('./services/delivery');
+const messenger = require('./services/messengerService');
 
 const app = express();
 
@@ -34,6 +35,8 @@ app.use(
 // The Stripe webhook needs the raw, unparsed body for signature verification,
 // so its raw parser MUST be registered before the global express.json().
 app.use('/api/stripe/webhook', express.raw({ type: 'application/json' }));
+// Messenger signs the raw body (X-Hub-Signature-256), so capture it raw too.
+app.use('/api/messenger/webhook', express.raw({ type: 'application/json' }));
 // 20mb: invoice-scan uploads carry a base64 phone photo, which inflates ~33%.
 app.use(express.json({ limit: '20mb' }));
 
@@ -232,6 +235,75 @@ async function fulfilOrder(orderId) {
   } finally {
     client.release();
   }
+}
+
+// Build a website link that pre-fills the cart from matched Messenger items, so
+// the customer completes delivery address + payment with the full website flow.
+function buildCartLink(lines) {
+  const frontend = (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
+  const compact = lines.map((l) => ({ id: l.product_id, qty: l.qty }));
+  const b64 = Buffer.from(JSON.stringify(compact)).toString('base64url');
+  return `${frontend}/cart?cart=${b64}&src=messenger`;
+}
+
+// Parse a customer's Messenger order message, price it, and reply with a summary
+// + a ready-to-checkout link. This is the manual-bill-typing eliminator.
+async function handleMessengerOrder(shopId, senderId, text) {
+  const settings = await getSettings(shopId);
+  const { rows: catalogue } = await pool.query(
+    `SELECT id, name, name_th FROM products WHERE shop_id = $1 AND is_active = TRUE`,
+    [shopId]
+  );
+
+  let parsed;
+  try {
+    parsed = await aiService.parseOrderItems(text, catalogue);
+  } catch (e) {
+    await messenger.sendMessage(senderId,
+      "Sorry, I couldn't read that. Please send a list like: 2x Jasmine Rice 5kg, 1x Coconut Milk");
+    return;
+  }
+  const th = parsed.language === 'th';
+
+  // Price the matched items from live data.
+  let subtotal = 0;
+  const lines = [];
+  for (const it of parsed.items) {
+    const { rows } = await pool.query(
+      `SELECT id, name, price FROM products WHERE id = $1 AND shop_id = $2 AND is_active = TRUE`,
+      [it.product_id, shopId]
+    );
+    const p = rows[0];
+    if (!p) continue;
+    const qty = Math.max(1, Number(it.qty) || 1);
+    const lineTotal = Number(p.price) * qty;
+    subtotal += lineTotal;
+    lines.push({ product_id: p.id, name: p.name, qty, lineTotal });
+  }
+
+  if (lines.length === 0) {
+    await messenger.sendMessage(senderId, th
+      ? 'ขออภัยค่ะ ไม่พบสินค้าที่ตรงกับรายการของคุณ ลองพิมพ์ชื่อสินค้าอีกครั้งนะคะ'
+      : "Sorry, I couldn't match any items. Try product names, e.g. 2x Jasmine Rice 5kg, 1x Coconut Milk.");
+    return;
+  }
+
+  const minOrder = Number(settings.minimum_order_amount || 0);
+  const summary = lines.map((l) => `• ${l.name} × ${l.qty} — £${l.lineTotal.toFixed(2)}`).join('\n');
+  let reply = (th ? 'นี่คือรายการสั่งซื้อของคุณค่ะ:\n' : "Here's your order:\n") +
+    summary + '\n' + (th ? `รวม: £${subtotal.toFixed(2)}` : `Subtotal: £${subtotal.toFixed(2)}`);
+  if (subtotal < minOrder) {
+    reply += '\n' + (th
+      ? `(ยอดสั่งซื้อขั้นต่ำ £${minOrder.toFixed(2)} — กรุณาเพิ่มสินค้าค่ะ)`
+      : `(Minimum order is £${minOrder.toFixed(2)} — please add a little more.)`);
+  }
+  if (parsed.unmatched.length) {
+    reply += '\n' + (th ? 'ไม่พบ: ' : "Couldn't find: ") + parsed.unmatched.join(', ');
+  }
+  reply += '\n\n' + (th ? 'ชำระเงินและกรอกที่อยู่จัดส่งที่นี่ค่ะ:\n' : 'Pay & enter delivery address here:\n') +
+    buildCartLink(lines);
+
+  await messenger.sendMessage(senderId, reply);
 }
 
 // Send the customer receipt + shop-owner notification for a paid order.
@@ -1251,6 +1323,63 @@ app.post('/api/stripe/webhook', async (req, res) => {
     }
   }
   res.json({ received: true });
+});
+
+// ---------------------------------------------------------------------------
+// Facebook Messenger bot (SIAMSHOP-011)
+// ---------------------------------------------------------------------------
+// Verification handshake (set the same verify token in the FB App webhook config).
+app.get('/api/messenger/webhook', (req, res) => {
+  const challenge = messenger.verifyChallenge(req.query);
+  if (challenge) return res.status(200).send(challenge);
+  res.sendStatus(403);
+});
+
+// Incoming messages. Verify the signature, ack 200 fast (FB requires < 20s), then
+// process each message asynchronously: parse -> price -> reply with checkout link.
+app.post('/api/messenger/webhook', async (req, res) => {
+  const raw = req.body; // Buffer, from express.raw above
+  if (!messenger.verifySignature(raw, req.headers['x-hub-signature-256'])) {
+    return res.sendStatus(403);
+  }
+  res.sendStatus(200);
+
+  let payload;
+  try {
+    payload = JSON.parse(raw.toString('utf8'));
+  } catch {
+    return;
+  }
+  if (payload.object !== 'page') return;
+  const messages = messenger.extractMessages(payload);
+  if (messages.length === 0) return;
+  const shopId = await getShopIdBySlug(process.env.DEFAULT_SHOP_SLUG || 'demo');
+  if (!shopId) return;
+  for (const m of messages) {
+    handleMessengerOrder(shopId, m.senderId, m.text).catch((e) =>
+      console.error('[messenger] handle', e.message)
+    );
+  }
+});
+
+// Admin-only tester for the order parser (so it can be exercised without FB).
+app.post('/api/messenger/parse', requireAuth, async (req, res) => {
+  if (!aiService.isConfigured()) {
+    return res.status(503).json({ error: 'AI parsing not configured (ANTHROPIC_API_KEY unset).' });
+  }
+  try {
+    const shopId = await resolveShopId(req);
+    if (!shopId) return res.status(404).json({ error: 'Shop not found' });
+    const { rows: catalogue } = await pool.query(
+      `SELECT id, name, name_th FROM products WHERE shop_id = $1 AND is_active = TRUE`,
+      [shopId]
+    );
+    const parsed = await aiService.parseOrderItems(String(req.body?.text || ''), catalogue);
+    res.json(parsed);
+  } catch (err) {
+    console.error('[messenger/parse]', err.message);
+    res.status(502).json({ error: err.message });
+  }
 });
 
 // ---------------------------------------------------------------------------

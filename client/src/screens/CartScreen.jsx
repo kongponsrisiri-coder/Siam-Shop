@@ -1,14 +1,15 @@
 import React, { useEffect, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useCart } from '../cart.jsx';
 import { useT } from '../lang.jsx';
 import { api } from '../api.js';
 
 export default function CartScreen() {
-  const { items, setQty, remove, subtotal } = useCart();
+  const { items, add, setQty, remove, subtotal } = useCart();
   const navigate = useNavigate();
   const t = useT();
   const [minOrder, setMinOrder] = useState(0);
+  const [params, setParams] = useSearchParams();
 
   useEffect(() => {
     let live = true;
@@ -19,6 +20,30 @@ export default function CartScreen() {
     return () => {
       live = false;
     };
+  }, []);
+
+  // Pre-fill the cart from a Messenger checkout link: /cart?cart=<base64url [{id,qty}]>.
+  useEffect(() => {
+    const raw = params.get('cart');
+    if (!raw) return;
+    let wanted;
+    try {
+      wanted = JSON.parse(atob(raw.replace(/-/g, '+').replace(/_/g, '/')));
+    } catch {
+      return;
+    }
+    Promise.all(
+      (wanted || []).map((w) =>
+        api.getProduct(w.id).then((p) => ({ p, qty: Math.max(1, Number(w.qty) || 1) })).catch(() => null)
+      )
+    ).then((results) => {
+      results.filter(Boolean).forEach(({ p, qty }) => add(p, qty));
+      // Clear the param so a refresh doesn't re-add.
+      params.delete('cart');
+      params.delete('src');
+      setParams(params, { replace: true });
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   if (items.length === 0) {
