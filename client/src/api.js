@@ -61,4 +61,9 @@ export const api = {
 
   // Admin orders
   adminListOrders: () => request('/api/admin/orders', { authed: true }),
+
+  // In-store till (staff)
+  lookupBarcode: (code) => request(`/api/products/lookup?barcode=${encodeURIComponent(code)}`, { authed: true }),
+  createSale: (sale) => request('/api/sales', { method: 'POST', body: sale, authed: true }),
+  salesSummary: () => request('/api/sales/summary', { authed: true }),
 };

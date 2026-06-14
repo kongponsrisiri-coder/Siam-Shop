@@ -77,6 +77,14 @@ function requireAuth(req, res, next) {
   next();
 }
 
+// Small helper to throw an error that carries an HTTP status through a try/catch
+// (used inside transactions so a failed line rolls the whole sale back).
+function httpError(status, message) {
+  const e = new Error(message);
+  e.httpStatus = status;
+  return e;
+}
+
 // Resolve the shop for a request. For now the scaffold is single-tenant: it
 // uses ?shop=<slug> or falls back to DEFAULT_SHOP_SLUG. Slug-based routing for
 // real multi-shop is SIAMSHOP-010.
@@ -176,6 +184,29 @@ app.get('/api/products', async (req, res) => {
   }
 });
 
+// Look up a product by barcode (or SKU) for the till — staff only. MUST be
+// declared before "/api/products/:id" or the :id matcher swallows "lookup".
+app.get('/api/products/lookup', requireAuth, async (req, res) => {
+  try {
+    const shopId = await resolveShopId(req);
+    if (!shopId) return res.status(404).json({ error: 'Shop not found' });
+    const code = String(req.query.barcode || req.query.code || '').trim();
+    if (!code) return res.status(400).json({ error: 'barcode is required' });
+    const { rows } = await pool.query(
+      `SELECT id, name, name_th, barcode, sku, unit, price, stock_qty
+       FROM products
+       WHERE shop_id = $1 AND is_active = TRUE AND (barcode = $2 OR sku = $2)
+       LIMIT 1`,
+      [shopId, code]
+    );
+    if (!rows[0]) return res.status(404).json({ error: 'No product with that barcode' });
+    res.json(rows[0]);
+  } catch (err) {
+    console.error('[products/lookup]', err.message);
+    res.status(500).json({ error: 'Lookup failed' });
+  }
+});
+
 app.get('/api/products/:id', async (req, res) => {
   try {
     const shopId = await resolveShopId(req);
@@ -202,7 +233,8 @@ app.get('/api/admin/products', requireAuth, async (req, res) => {
     const shopId = await resolveShopId(req);
     if (!shopId) return res.status(404).json({ error: 'Shop not found' });
     const { rows } = await pool.query(
-      `SELECT id, name, name_th, description, price, stock_qty, category, image_url, is_active, created_at
+      `SELECT id, name, name_th, description, barcode, sku, unit, price, cost_price,
+              stock_qty, category, image_url, is_active, created_at
        FROM products WHERE shop_id = $1 ORDER BY created_at DESC`,
       [shopId]
     );
@@ -217,18 +249,22 @@ app.post('/api/admin/products', requireAuth, async (req, res) => {
   try {
     const shopId = await resolveShopId(req);
     if (!shopId) return res.status(404).json({ error: 'Shop not found' });
-    const { name, name_th, description, price, stock_qty, category, image_url, is_active } = req.body || {};
+    const { name, name_th, description, barcode, sku, unit, price, cost_price, stock_qty, category, image_url, is_active } = req.body || {};
     if (!name || !String(name).trim()) return res.status(400).json({ error: 'Name is required' });
     const { rows } = await pool.query(
-      `INSERT INTO products (shop_id, name, name_th, description, price, stock_qty, category, image_url, is_active)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+      `INSERT INTO products (shop_id, name, name_th, description, barcode, sku, unit, price, cost_price, stock_qty, category, image_url, is_active)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
        RETURNING *`,
       [
         shopId,
         String(name).trim(),
         name_th || null,
         description || null,
+        barcode ? String(barcode).trim() : null,
+        sku ? String(sku).trim() : null,
+        unit || 'each',
         Number(price) || 0,
+        Number(cost_price) || 0,
         Number.isInteger(stock_qty) ? stock_qty : Number(stock_qty) || 0,
         category || null,
         image_url || null,
@@ -237,6 +273,7 @@ app.post('/api/admin/products', requireAuth, async (req, res) => {
     );
     res.status(201).json(rows[0]);
   } catch (err) {
+    if (err.code === '23505') return res.status(409).json({ error: 'That barcode is already used by another product' });
     console.error('[admin/products POST]', err.message);
     res.status(500).json({ error: 'Failed to create product' });
   }
@@ -246,17 +283,21 @@ app.put('/api/admin/products/:id', requireAuth, async (req, res) => {
   try {
     const shopId = await resolveShopId(req);
     if (!shopId) return res.status(404).json({ error: 'Shop not found' });
-    const { name, name_th, description, price, stock_qty, category, image_url, is_active } = req.body || {};
+    const { name, name_th, description, barcode, sku, unit, price, cost_price, stock_qty, category, image_url, is_active } = req.body || {};
     const { rows } = await pool.query(
       `UPDATE products SET
          name = COALESCE($3, name),
          name_th = $4,
          description = $5,
-         price = COALESCE($6, price),
-         stock_qty = COALESCE($7, stock_qty),
-         category = $8,
-         image_url = $9,
-         is_active = COALESCE($10, is_active)
+         barcode = $6,
+         sku = $7,
+         unit = COALESCE($8, unit),
+         price = COALESCE($9, price),
+         cost_price = COALESCE($10, cost_price),
+         stock_qty = COALESCE($11, stock_qty),
+         category = $12,
+         image_url = $13,
+         is_active = COALESCE($14, is_active)
        WHERE id = $1 AND shop_id = $2
        RETURNING *`,
       [
@@ -265,7 +306,11 @@ app.put('/api/admin/products/:id', requireAuth, async (req, res) => {
         name != null ? String(name).trim() : null,
         name_th ?? null,
         description ?? null,
+        barcode ? String(barcode).trim() : null,
+        sku ? String(sku).trim() : null,
+        unit ?? null,
         price != null ? Number(price) : null,
+        cost_price != null ? Number(cost_price) : null,
         stock_qty != null ? Number(stock_qty) : null,
         category ?? null,
         image_url ?? null,
@@ -275,6 +320,7 @@ app.put('/api/admin/products/:id', requireAuth, async (req, res) => {
     if (!rows[0]) return res.status(404).json({ error: 'Product not found' });
     res.json(rows[0]);
   } catch (err) {
+    if (err.code === '23505') return res.status(409).json({ error: 'That barcode is already used by another product' });
     console.error('[admin/products PUT]', err.message);
     res.status(500).json({ error: 'Failed to update product' });
   }
@@ -297,6 +343,139 @@ app.delete('/api/admin/products/:id', requireAuth, async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
+// In-store EPOS till (SIAMSHOP-103) — staff-facing, requires auth.
+// (The barcode lookup route lives above, before /api/products/:id, so the
+// literal "lookup" path isn't swallowed by the :id matcher.)
+// ---------------------------------------------------------------------------
+
+// Record an in-store sale. Transactional: create the order + items, decrement
+// stock, and write a stock_movements row per line — all or nothing. Stock is
+// the source of truth, so we re-read the live price/stock inside the txn and
+// never trust client-supplied prices (CLAUDE.md rule).
+app.post('/api/sales', requireAuth, async (req, res) => {
+  const shopId = await resolveShopId(req);
+  if (!shopId) return res.status(404).json({ error: 'Shop not found' });
+
+  const items = Array.isArray(req.body?.items) ? req.body.items : [];
+  const paymentMethod = req.body?.payment_method === 'card' ? 'card' : 'cash';
+  const tendered = req.body?.amount_tendered != null ? Number(req.body.amount_tendered) : null;
+  const staff = req.auth?.name || 'admin';
+
+  if (items.length === 0) return res.status(400).json({ error: 'Cart is empty' });
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    // Lock each product row, validate stock, compute the authoritative total.
+    let subtotal = 0;
+    const lines = [];
+    for (const it of items) {
+      const qty = Number(it.qty);
+      if (!Number.isInteger(qty) || qty <= 0) throw httpError(400, 'Invalid quantity');
+      const { rows } = await client.query(
+        `SELECT id, name, price, stock_qty FROM products
+         WHERE id = $1 AND shop_id = $2 AND is_active = TRUE FOR UPDATE`,
+        [it.product_id, shopId]
+      );
+      const p = rows[0];
+      if (!p) throw httpError(404, `Product ${it.product_id} not found`);
+      if (p.stock_qty < qty) throw httpError(409, `Not enough stock for ${p.name} (${p.stock_qty} left)`);
+      const lineTotal = Number(p.price) * qty;
+      subtotal += lineTotal;
+      lines.push({ product: p, qty, lineTotal });
+    }
+
+    const total = subtotal; // no delivery fee in-store
+    let change = null;
+    if (paymentMethod === 'cash' && tendered != null) {
+      if (tendered < total) throw httpError(400, 'Amount tendered is less than the total');
+      change = +(tendered - total).toFixed(2);
+    }
+
+    const orderRes = await client.query(
+      `INSERT INTO orders (shop_id, channel, status, subtotal, total, payment_method,
+                           amount_tendered, change_given, staff, payment_status, fulfilled_at)
+       VALUES ($1,'instore','completed',$2,$3,$4,$5,$6,$7,'paid',NOW())
+       RETURNING id, created_at`,
+      [shopId, subtotal, total, paymentMethod, tendered, change, staff]
+    );
+    const orderId = orderRes.rows[0].id;
+
+    for (const ln of lines) {
+      await client.query(
+        `INSERT INTO order_items (order_id, product_id, name_snapshot, price_snapshot, qty, line_total)
+         VALUES ($1,$2,$3,$4,$5,$6)`,
+        [orderId, ln.product.id, ln.product.name, ln.product.price, ln.qty, ln.lineTotal]
+      );
+      await client.query(
+        `UPDATE products SET stock_qty = stock_qty - $1 WHERE id = $2`,
+        [ln.qty, ln.product.id]
+      );
+      await client.query(
+        `INSERT INTO stock_movements (shop_id, product_id, change_qty, reason, ref_order_id, staff)
+         VALUES ($1,$2,$3,'sale',$4,$5)`,
+        [shopId, ln.product.id, -ln.qty, orderId, staff]
+      );
+    }
+
+    await client.query('COMMIT');
+    res.status(201).json({
+      id: orderId,
+      channel: 'instore',
+      subtotal: +subtotal.toFixed(2),
+      total: +total.toFixed(2),
+      payment_method: paymentMethod,
+      amount_tendered: tendered,
+      change_given: change,
+      created_at: orderRes.rows[0].created_at,
+      items: lines.map((l) => ({ name: l.product.name, qty: l.qty, line_total: l.lineTotal })),
+    });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    if (err.httpStatus) return res.status(err.httpStatus).json({ error: err.message });
+    console.error('[sales POST]', err.message);
+    res.status(500).json({ error: 'Failed to record sale' });
+  } finally {
+    client.release();
+  }
+});
+
+// Today's takings (since local midnight UTC for now), broken down by channel
+// and payment method — the "how much it sold" view.
+app.get('/api/sales/summary', requireAuth, async (req, res) => {
+  try {
+    const shopId = await resolveShopId(req);
+    if (!shopId) return res.status(404).json({ error: 'Shop not found' });
+    const { rows } = await pool.query(
+      `SELECT channel,
+              COALESCE(payment_method, '—') AS payment_method,
+              COUNT(*)::int AS order_count,
+              COALESCE(SUM(total), 0)::numeric AS gross
+       FROM orders
+       WHERE shop_id = $1
+         AND payment_status = 'paid'
+         AND created_at >= date_trunc('day', NOW())
+       GROUP BY channel, payment_method
+       ORDER BY channel, payment_method`,
+      [shopId]
+    );
+    const totals = rows.reduce(
+      (acc, r) => {
+        acc.order_count += r.order_count;
+        acc.gross += Number(r.gross);
+        return acc;
+      },
+      { order_count: 0, gross: 0 }
+    );
+    res.json({ date: new Date().toISOString().slice(0, 10), breakdown: rows, totals });
+  } catch (err) {
+    console.error('[sales/summary]', err.message);
+    res.status(500).json({ error: 'Failed to load summary' });
+  }
+});
+
+// ---------------------------------------------------------------------------
 // Admin — orders (read-only in the scaffold; fulfilment is SIAMSHOP-005)
 // ---------------------------------------------------------------------------
 app.get('/api/admin/orders', requireAuth, async (req, res) => {
@@ -304,7 +483,8 @@ app.get('/api/admin/orders', requireAuth, async (req, res) => {
     const shopId = await resolveShopId(req);
     if (!shopId) return res.status(404).json({ error: 'Shop not found' });
     const { rows } = await pool.query(
-      `SELECT o.id, o.status, o.payment_status, o.subtotal, o.delivery_fee, o.total,
+      `SELECT o.id, o.channel, o.status, o.payment_status, o.payment_method,
+              o.subtotal, o.delivery_fee, o.total,
               o.created_at, o.fulfilled_at, c.name AS customer_name, c.email AS customer_email
        FROM orders o
        LEFT JOIN customers c ON c.id = o.customer_id

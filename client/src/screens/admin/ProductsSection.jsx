@@ -5,12 +5,18 @@ const EMPTY = {
   name: '',
   name_th: '',
   description: '',
+  barcode: '',
+  sku: '',
+  unit: 'each',
   price: '',
+  cost_price: '',
   stock_qty: '',
   category: '',
   image_url: '',
   is_active: true,
 };
+
+const UNITS = ['each', 'kg', 'g', 'pack', 'bottle', 'can', 'box'];
 
 function ProductForm({ initial, onSave, onCancel }) {
   const [form, setForm] = useState({ ...EMPTY, ...initial });
@@ -29,6 +35,7 @@ function ProductForm({ initial, onSave, onCancel }) {
       await onSave({
         ...form,
         price: Number(form.price) || 0,
+        cost_price: Number(form.cost_price) || 0,
         stock_qty: Number(form.stock_qty) || 0,
       });
     } catch (err) {
@@ -54,15 +61,35 @@ function ProductForm({ initial, onSave, onCancel }) {
       <label>Description</label>
       <textarea rows="3" value={form.description || ''} onChange={(e) => set('description', e.target.value)} />
       <div className="row" style={{ gap: 12, flexWrap: 'wrap' }}>
-        <div style={{ flex: '1 1 120px' }}>
-          <label>Price (£)</label>
+        <div style={{ flex: '1 1 200px' }}>
+          <label>Barcode (EAN/UPC)</label>
+          <input value={form.barcode || ''} onChange={(e) => set('barcode', e.target.value)} placeholder="e.g. 8850999320014" />
+        </div>
+        <div style={{ flex: '1 1 140px' }}>
+          <label>SKU</label>
+          <input value={form.sku || ''} onChange={(e) => set('sku', e.target.value)} />
+        </div>
+        <div style={{ flex: '1 1 100px' }}>
+          <label>Unit</label>
+          <select value={form.unit || 'each'} onChange={(e) => set('unit', e.target.value)}>
+            {UNITS.map((u) => <option key={u} value={u}>{u}</option>)}
+          </select>
+        </div>
+      </div>
+      <div className="row" style={{ gap: 12, flexWrap: 'wrap' }}>
+        <div style={{ flex: '1 1 110px' }}>
+          <label>Sell price (£)</label>
           <input type="number" step="0.01" value={form.price} onChange={(e) => set('price', e.target.value)} />
         </div>
-        <div style={{ flex: '1 1 120px' }}>
+        <div style={{ flex: '1 1 110px' }}>
+          <label>Cost price (£)</label>
+          <input type="number" step="0.01" value={form.cost_price} onChange={(e) => set('cost_price', e.target.value)} />
+        </div>
+        <div style={{ flex: '1 1 100px' }}>
           <label>Stock qty</label>
           <input type="number" value={form.stock_qty} onChange={(e) => set('stock_qty', e.target.value)} />
         </div>
-        <div style={{ flex: '1 1 160px' }}>
+        <div style={{ flex: '1 1 140px' }}>
           <label>Category</label>
           <input value={form.category || ''} onChange={(e) => set('category', e.target.value)} />
         </div>
@@ -162,6 +189,7 @@ export default function ProductsSection() {
                     <td>
                       {p.name}
                       {p.name_th && <div className="muted" style={{ fontSize: 12 }}>{p.name_th}</div>}
+                      {p.barcode && <div className="muted" style={{ fontSize: 11 }}>▮ {p.barcode}</div>}
                     </td>
                     <td>{p.category || '—'}</td>
                     <td>£{Number(p.price).toFixed(2)}</td>

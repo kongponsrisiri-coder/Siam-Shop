@@ -15,10 +15,23 @@
 ---
 
 ## Project
-SiamShop — e-commerce platform for Thai supermarkets in the UK.
-A new standalone product, separate from SiamEPOS, built for independent
-Thai grocery shops wanting to sell online with zero platform fees.
-Owner: Korakot Kongponsrisiri | info@siamepos.co.uk
+SiamShop — a **unified retail system** for Thai supermarkets in the UK.
+A new standalone product, separate from SiamEPOS (which is restaurant-only),
+built for independent Thai grocery shops. Owner: Korakot Kongponsrisiri | info@siamepos.co.uk
+
+**Re-scoped 2026-06-14 (was "e-commerce website"):** SiamShop is now one system
+built around a single shared **stock/inventory core** as the source of truth,
+with three surfaces on top:
+
+1. **In-store EPOS till** — staff ring up walk-in customers; sales decrement stock.
+2. **Website** — customers order online; online sales decrement the same stock.
+3. **Phone scanner (PWA)** — camera barcode scanning + AI invoice scanning for
+   in-store checkout, goods-in (receiving), and stocktake.
+
+The payoff: in-store + online sales both write to one stock ledger, so the shop
+always sees true stock levels and combined "what sold". Stock is the hub; the
+till, website, and scanner are spokes. This is a **grocery EPOS**, not a
+restaurant one — barcode/stock-centric, built fresh (not forked from SiamEPOS).
 
 ## Your Role
 You are **Joy** — SiamShop's dedicated developer agent.
@@ -92,19 +105,29 @@ siamshop/
 -- Shops (multi-tenant from day one)
 shops (id, name, slug, brevo_list_id, stripe_account_id, created_at)
 
--- Products
-products (id, shop_id, name, name_th, description, price, stock_qty,
+-- Products — barcode/stock-centric for grocery retail
+products (id, shop_id, name, name_th, description,
+          barcode, sku, unit,              -- barcode = EAN/UPC; unit = each/kg
+          price, cost_price, stock_qty,    -- price = sell, cost_price = buy
           category, image_url, is_active, created_at)
+
+-- Stock movements ledger — every stock change, all channels (audit trail).
+-- products.stock_qty is the fast current value; this is the history.
+stock_movements (id, shop_id, product_id, change_qty,  -- +in / -out
+                 reason,        -- sale | online_sale | goods_in | stocktake | refund
+                 ref_order_id, note, staff, created_at)
 
 -- Customers
 customers (id, shop_id, email, name, phone, marketing_consent, created_at)
 
--- Orders
-orders (id, shop_id, customer_id, status, subtotal, delivery_fee, total,
+-- Orders/sales — channel-tagged so in-store + online share one table
+orders (id, shop_id, customer_id, channel,        -- instore | online
+        status, subtotal, delivery_fee, total,
+        payment_method, amount_tendered, change_given,  -- in-store cash/card
         stripe_payment_intent_id, payment_status, delivery_address,
-        notes, created_at, fulfilled_at)
+        notes, staff, created_at, fulfilled_at)
 
--- Order items
+-- Order items (snapshot name + price)
 order_items (id, order_id, product_id, name_snapshot, price_snapshot,
              qty, line_total)
 
@@ -151,22 +174,44 @@ FRONTEND_URL          ← Netlify URL (for CORS + Stripe redirect)
 
 ## Tickets
 
-### Backlog (to be refined with Korakot)
+### Milestone roadmap (re-scoped 2026-06-14 — unified retail system)
 
-- **SIAMSHOP-001** — Project scaffold: Railway + Netlify setup, DB schema, initDB(), basic Express server, React+Vite client
-- **SIAMSHOP-002** — Product catalogue: CRUD admin + public storefront (grid view, category filter, search)
-- **SIAMSHOP-003** — Cart + Stripe checkout (Stripe Checkout hosted page, order creation, stock decrement)
-- **SIAMSHOP-004** — Order confirmation emails (Brevo transactional — customer receipt + shop notification)
-- **SIAMSHOP-005** — Admin order management (view orders, mark fulfilled, print packing slip)
-- **SIAMSHOP-006** — Customer accounts + order history
-- **SIAMSHOP-007** — Delivery zones + fees (postcode-based, configurable per shop)
-- **SIAMSHOP-008** — AI product descriptions (Anthropic API — generate from product name + category)
-- **SIAMSHOP-009** — Stripe webhook lifecycle (payment_failed, refund, subscription if needed)
-- **SIAMSHOP-010** — Multi-shop support (slug-based routing, shop-aware admin login)
+Built around the shared stock core. Surfaces in build order:
+
+**M1 — In-store EPOS till + stock core** ← *building now*
+- **SIAMSHOP-101** ✅ DONE — Scaffold (was SIAMSHOP-001): DB, Express server, HMAC
+  auth, React+Vite client (storefront/admin), Stripe + Brevo services.
+- **SIAMSHOP-102** — Stock core: products gain `barcode/sku/cost_price/unit`;
+  `stock_movements` ledger; `orders` gain `channel/payment_method/amount_tendered/
+  change_given`. Product lookup by barcode.
+- **SIAMSHOP-103** — In-store till: scan/search → basket → cash/card → complete
+  sale (transactional: decrement stock + log movement + order channel=instore).
+- **SIAMSHOP-104** — "Today's sales" report (takings by channel + payment method).
+
+**M2 — Phone scanner PWA (input system)**
+- **SIAMSHOP-201** — Camera barcode scanning (BarcodeDetector / ZXing) on a mobile PWA.
+- **SIAMSHOP-202** — Modes: in-store checkout, goods-in (receive stock), stocktake (count + variance).
+- **SIAMSHOP-203** — AI invoice scanner: photo → Anthropic vision → line items → goods-in.
+
+**M3 — Website on shared stock**
+- **SIAMSHOP-301** — Wire scaffolded storefront → Stripe Checkout; online orders decrement shared stock.
+- **SIAMSHOP-302** — Order confirmation emails (Brevo: customer receipt + shop notification).
+- **SIAMSHOP-303** — Stripe webhook lifecycle (paid/failed/refund → stock restore).
+
+**M4 — Back-office & ops**
+- **SIAMSHOP-401** — Cross-channel sales reporting + dashboards.
+- **SIAMSHOP-402** — Stock levels, low-stock alerts, stocktake history.
+- **SIAMSHOP-403** — AI product descriptions; **SIAMSHOP-404** — delivery zones/fees;
+  **SIAMSHOP-405** — customer accounts; **SIAMSHOP-406** — multi-shop slug routing.
+
+### Decisions / assumptions
+- In-store **card** payments are *recorded only* (shop uses its existing card
+  terminal). Full Stripe Terminal hardware is a later milestone. Cash is fully
+  handled (tender → change).
 
 ### First prospect
-One Thai supermarket in the UK has already expressed interest.
-Get SIAMSHOP-001 → 003 done so Korakot can demo a working checkout.
+One Thai supermarket in the UK has expressed interest. Goal: a working in-store
+till (M1) they can ring up sales on, then the phone scanner (M2) for stock.
 
 ---
 

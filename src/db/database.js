@@ -49,7 +49,7 @@ async function initDB() {
       )
     `);
 
-    // Products
+    // Products — barcode/stock-centric for grocery retail
     await pool.query(`
       CREATE TABLE IF NOT EXISTS products (
         id          SERIAL PRIMARY KEY,
@@ -57,7 +57,11 @@ async function initDB() {
         name        VARCHAR(300) NOT NULL,
         name_th     VARCHAR(300),
         description TEXT,
-        price       NUMERIC(10,2) NOT NULL DEFAULT 0,
+        barcode     VARCHAR(64),                          -- EAN/UPC; unique per shop (see index)
+        sku         VARCHAR(64),
+        unit        VARCHAR(20) NOT NULL DEFAULT 'each',  -- each | kg | g | pack | bottle ...
+        price       NUMERIC(10,2) NOT NULL DEFAULT 0,     -- sell price
+        cost_price  NUMERIC(10,2) NOT NULL DEFAULT 0,     -- buy price (for margin)
         stock_qty   INTEGER NOT NULL DEFAULT 0,
         category    VARCHAR(120),
         image_url   TEXT,
@@ -80,16 +84,21 @@ async function initDB() {
       )
     `);
 
-    // Orders
+    // Orders / sales — channel-tagged so in-store + online share one table
     await pool.query(`
       CREATE TABLE IF NOT EXISTS orders (
         id                        SERIAL PRIMARY KEY,
         shop_id                   INTEGER NOT NULL REFERENCES shops(id) ON DELETE CASCADE,
         customer_id               INTEGER REFERENCES customers(id) ON DELETE SET NULL,
+        channel                   VARCHAR(20) NOT NULL DEFAULT 'online',  -- instore | online
         status                    VARCHAR(40) NOT NULL DEFAULT 'pending',
         subtotal                  NUMERIC(10,2) NOT NULL DEFAULT 0,
         delivery_fee              NUMERIC(10,2) NOT NULL DEFAULT 0,
         total                     NUMERIC(10,2) NOT NULL DEFAULT 0,
+        payment_method            VARCHAR(20),            -- cash | card (in-store)
+        amount_tendered           NUMERIC(10,2),          -- cash given by customer
+        change_given              NUMERIC(10,2),          -- change handed back
+        staff                     VARCHAR(120),           -- who rang it up
         stripe_payment_intent_id  VARCHAR(120),
         payment_status            VARCHAR(40) NOT NULL DEFAULT 'unpaid',
         delivery_address          TEXT,
@@ -113,6 +122,23 @@ async function initDB() {
       )
     `);
 
+    // Stock movements ledger — every stock change, all channels (audit trail).
+    // products.stock_qty is the fast current value; this is the history of how
+    // it got there. reason: sale | online_sale | goods_in | stocktake | refund.
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS stock_movements (
+        id            SERIAL PRIMARY KEY,
+        shop_id       INTEGER NOT NULL REFERENCES shops(id) ON DELETE CASCADE,
+        product_id    INTEGER REFERENCES products(id) ON DELETE SET NULL,
+        change_qty    INTEGER NOT NULL,          -- positive = in, negative = out
+        reason        VARCHAR(30) NOT NULL,
+        ref_order_id  INTEGER REFERENCES orders(id) ON DELETE SET NULL,
+        note          TEXT,
+        staff         VARCHAR(120),
+        created_at    TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+
     // Per-shop settings — flexible key/value
     await pool.query(`
       CREATE TABLE IF NOT EXISTS shop_settings (
@@ -123,14 +149,26 @@ async function initDB() {
       )
     `);
 
-    // Helpful indexes for the hot paths (storefront listing, admin order list).
+    // --- Migrations (ADD COLUMN IF NOT EXISTS) — keep existing DBs in sync ---
+    // SIAMSHOP-102: grocery/stock fields. Safe to run every boot.
+    await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS barcode VARCHAR(64)`);
+    await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS sku VARCHAR(64)`);
+    await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS unit VARCHAR(20) NOT NULL DEFAULT 'each'`);
+    await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS cost_price NUMERIC(10,2) NOT NULL DEFAULT 0`);
+    await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS channel VARCHAR(20) NOT NULL DEFAULT 'online'`);
+    await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_method VARCHAR(20)`);
+    await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS amount_tendered NUMERIC(10,2)`);
+    await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS change_given NUMERIC(10,2)`);
+    await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS staff VARCHAR(120)`);
+
+    // Helpful indexes for the hot paths.
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_products_shop ON products(shop_id, is_active)`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_orders_shop ON orders(shop_id, created_at DESC)`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_order_items_order ON order_items(order_id)`);
-
-    // --- Migrations (ADD COLUMN IF NOT EXISTS) go here as the schema evolves ---
-    // Example for future tickets:
-    // await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS unit VARCHAR(40)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_stock_moves_shop ON stock_movements(shop_id, created_at DESC)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_stock_moves_product ON stock_movements(product_id)`);
+    // Barcode lookup must be fast and unique within a shop (partial: only when set).
+    await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_products_barcode ON products(shop_id, barcode) WHERE barcode IS NOT NULL`);
 
     await seedDefaultShop();
 

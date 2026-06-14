@@ -7,6 +7,7 @@ import ProductScreen from './screens/ProductScreen.jsx';
 import CartScreen from './screens/CartScreen.jsx';
 import CheckoutScreen from './screens/CheckoutScreen.jsx';
 import AdminScreen from './screens/admin/AdminScreen.jsx';
+import TillScreen from './screens/TillScreen.jsx';
 
 function TopBar() {
   const { count } = useCart();
@@ -16,6 +17,7 @@ function TopBar() {
       <div className="navlinks">
         <Link to="/">Shop</Link>
         <Link to="/cart">Cart{count > 0 ? ` (${count})` : ''}</Link>
+        <Link to="/till">Till</Link>
         <Link to="/admin">Admin</Link>
       </div>
     </div>
@@ -24,17 +26,26 @@ function TopBar() {
 
 export default function App() {
   return (
-    <>
-      <TopBar />
-      <Routes>
-        <Route path="/" element={<StorefrontScreen />} />
-        <Route path="/product/:id" element={<ProductScreen />} />
-        <Route path="/cart" element={<CartScreen />} />
-        <Route path="/checkout" element={<CheckoutScreen />} />
-        <Route path="/order/success" element={<CheckoutScreen success />} />
-        <Route path="/admin/*" element={<AdminScreen />} />
-        <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
-    </>
+    <Routes>
+      {/* The till is a focused full-screen surface with its own header. */}
+      <Route path="/till" element={<TillScreen />} />
+      <Route
+        path="*"
+        element={
+          <>
+            <TopBar />
+            <Routes>
+              <Route path="/" element={<StorefrontScreen />} />
+              <Route path="/product/:id" element={<ProductScreen />} />
+              <Route path="/cart" element={<CartScreen />} />
+              <Route path="/checkout" element={<CheckoutScreen />} />
+              <Route path="/order/success" element={<CheckoutScreen success />} />
+              <Route path="/admin/*" element={<AdminScreen />} />
+              <Route path="*" element={<Navigate to="/" replace />} />
+            </Routes>
+          </>
+        }
+      />
+    </Routes>
   );
 }
