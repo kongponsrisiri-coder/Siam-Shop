@@ -4,6 +4,13 @@ import { api } from '../api.js';
 import { useCart } from '../cart.jsx';
 import { useLang, useT, pickName } from '../lang.jsx';
 
+// Deterministic, on-brand gradient for products without a photo, so the
+// placeholder tiles look intentional and vary by category.
+function tint(seed) {
+  const h = (Number(seed) * 47) % 360;
+  return `linear-gradient(135deg, hsl(${h} 55% 92%), hsl(${(h + 28) % 360} 60% 84%))`;
+}
+
 // Inline back-in-stock signup shown on out-of-stock cards.
 function NotifyMe({ productId }) {
   const t = useT();
@@ -181,7 +188,11 @@ export default function StorefrontScreen() {
                 className="thumb"
                 style={p.image_url ? { backgroundImage: `url(${p.image_url})` } : {}}
               >
-                {!p.image_url && 'No image'}
+                {!p.image_url && (
+                  <span className="ph" style={{ background: tint(p.category_id || p.id) }}>
+                    {pickName(p, lang)}
+                  </span>
+                )}
                 {out && <span className="oos-badge">{t('outOfStock')}</span>}
               </Link>
               <div className="body">
