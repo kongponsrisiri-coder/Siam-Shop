@@ -1377,6 +1377,31 @@ app.get('/api/admin/dashboard', requireAuth, async (req, res) => {
       [shopId]
     )).rows;
 
+    // Top-selling products (paid orders, all-time) by revenue.
+    const topProducts = (await pool.query(
+      `SELECT oi.product_id, oi.name_snapshot AS name,
+              SUM(oi.qty)::int AS qty, SUM(oi.line_total)::numeric AS revenue
+       FROM order_items oi JOIN orders o ON o.id = oi.order_id
+       WHERE o.shop_id = $1 AND o.payment_status = 'paid'
+       GROUP BY oi.product_id, oi.name_snapshot
+       ORDER BY revenue DESC, qty DESC LIMIT 8`,
+      [shopId]
+    )).rows;
+
+    // Last 7 days of sales, zero-filled (paid orders).
+    const sales7d = (await pool.query(
+      `SELECT to_char(d, 'YYYY-MM-DD') AS date,
+              COALESCE(SUM(o.total), 0)::numeric AS gross,
+              COUNT(o.id)::int AS count
+       FROM generate_series(date_trunc('day', now()) - interval '6 days',
+                            date_trunc('day', now()), interval '1 day') d
+       LEFT JOIN orders o
+         ON o.shop_id = $1 AND o.payment_status = 'paid'
+        AND date_trunc('day', o.created_at) = d
+       GROUP BY d ORDER BY d`,
+      [shopId]
+    )).rows;
+
     res.json({
       sales: {
         day:   { gross: Number(sales.day_gross),   count: Number(sales.day_count) },
@@ -1395,6 +1420,8 @@ app.get('/api/admin/dashboard', requireAuth, async (req, res) => {
       low_stock: lowStock,
       recent_orders: recent,
       low_stock_threshold: LOW_STOCK,
+      top_products: topProducts.map((r) => ({ product_id: r.product_id, name: r.name, qty: r.qty, revenue: Number(r.revenue) })),
+      sales_7d: sales7d.map((r) => ({ date: r.date, gross: Number(r.gross), count: r.count })),
     });
   } catch (err) {
     console.error('[admin/dashboard]', err.message);

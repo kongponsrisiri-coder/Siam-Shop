@@ -4,6 +4,28 @@ import { api } from '../../api.js';
 const money = (n) => '£' + Number(n || 0).toFixed(2);
 const CHANNEL_LABEL = { online: 'Online', instore: 'In-store (till)', messenger: 'Messenger' };
 
+// Dependency-free 7-day bar chart of daily paid sales.
+function SalesChart({ data }) {
+  const max = Math.max(1, ...data.map((d) => d.gross));
+  return (
+    <div className="chart">
+      {data.map((d) => {
+        const dt = new Date(d.date + 'T00:00:00');
+        const day = dt.toLocaleDateString(undefined, { weekday: 'short' });
+        return (
+          <div className="chart-col" key={d.date} title={`${d.date}: ${money(d.gross)} · ${d.count} orders`}>
+            <div className="chart-val">{d.gross > 0 ? '£' + Math.round(d.gross) : ''}</div>
+            <div className="chart-bar-wrap">
+              <div className="chart-bar" style={{ height: Math.max(2, (d.gross / max) * 100) + '%' }} />
+            </div>
+            <div className="chart-x">{day}</div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function Kpi({ label, value, sub, accent }) {
   return (
     <div className="kpi" style={accent ? { borderTopColor: accent } : {}}>
@@ -46,6 +68,33 @@ export default function DashboardSection({ onGoToOrders }) {
         <Kpi label="Awaiting payment" value={c.awaiting_payment} sub="bank transfer / pending" />
         <Kpi label="Products" value={`${c.active_products}/${c.products}`} sub="active / total" />
         <Kpi label="Out of stock" value={c.out_of_stock} sub="tracked items at 0" />
+      </div>
+
+      {/* 7-day sales chart + top sellers */}
+      <div className="dash-cols">
+        <div className="panel">
+          <h3 style={{ marginTop: 0 }}>Last 7 days</h3>
+          <SalesChart data={data.sales_7d || []} />
+        </div>
+        <div className="panel">
+          <h3 style={{ marginTop: 0 }}>Top sellers</h3>
+          {(!data.top_products || data.top_products.length === 0) ? (
+            <p className="muted">No sales yet.</p>
+          ) : (
+            <table>
+              <thead><tr><th>Product</th><th>Sold</th><th style={{ textAlign: 'right' }}>Revenue</th></tr></thead>
+              <tbody>
+                {data.top_products.map((p, i) => (
+                  <tr key={p.product_id || i}>
+                    <td>{p.name}</td>
+                    <td>{p.qty}</td>
+                    <td style={{ textAlign: 'right' }}>{money(p.revenue)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
       </div>
 
       <div className="dash-cols">
