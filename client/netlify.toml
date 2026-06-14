@@ -1,0 +1,14 @@
+# Netlify config for the SiamShop client.
+# Set the Netlify "Base directory" to `client` and it will pick this up.
+[build]
+  command = "npm install && npm run build"
+  publish = "dist"
+
+# SPA fallback so React Router deep links (e.g. /product/12, /admin) work.
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
+
+# Set VITE_API_BASE in the Netlify UI (Site settings → Environment) to the
+# Railway backend URL, e.g. https://siamshop-api.up.railway.app

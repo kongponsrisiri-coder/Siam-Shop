@@ -1,0 +1,64 @@
+// SiamShop — all backend fetch calls live here (CLAUDE.md rule).
+// In dev, Vite proxies /api to the Express backend. In production set
+// VITE_API_BASE to the Railway URL at build time.
+
+const API_BASE = import.meta.env.VITE_API_BASE || '';
+
+// Admin token stored in localStorage; attached as a Bearer header.
+const TOKEN_KEY = 'siamshop_admin_token';
+export const auth = {
+  get: () => localStorage.getItem(TOKEN_KEY) || '',
+  set: (t) => localStorage.setItem(TOKEN_KEY, t),
+  clear: () => localStorage.removeItem(TOKEN_KEY),
+};
+
+async function request(path, { method = 'GET', body, authed = false } = {}) {
+  const headers = { 'Content-Type': 'application/json' };
+  if (authed) headers.Authorization = `Bearer ${auth.get()}`;
+
+  const res = await fetch(`${API_BASE}${path}`, {
+    method,
+    headers,
+    body: body != null ? JSON.stringify(body) : undefined,
+  });
+
+  let data = null;
+  try {
+    data = await res.json();
+  } catch {
+    /* no JSON body */
+  }
+  if (!res.ok) {
+    const msg = (data && data.error) || `Request failed (${res.status})`;
+    const err = new Error(msg);
+    err.status = res.status;
+    throw err;
+  }
+  return data;
+}
+
+export const api = {
+  // Health / shop
+  health: () => request('/api/health'),
+  getShop: () => request('/api/shop'),
+
+  // Public storefront
+  listProducts: (params = {}) => {
+    const qs = new URLSearchParams(params).toString();
+    return request(`/api/products${qs ? `?${qs}` : ''}`);
+  },
+  getProduct: (id) => request(`/api/products/${id}`),
+
+  // Admin auth
+  login: (password) => request('/api/admin/login', { method: 'POST', body: { password } }),
+  me: () => request('/api/admin/me', { authed: true }),
+
+  // Admin products
+  adminListProducts: () => request('/api/admin/products', { authed: true }),
+  createProduct: (p) => request('/api/admin/products', { method: 'POST', body: p, authed: true }),
+  updateProduct: (id, p) => request(`/api/admin/products/${id}`, { method: 'PUT', body: p, authed: true }),
+  deleteProduct: (id) => request(`/api/admin/products/${id}`, { method: 'DELETE', authed: true }),
+
+  // Admin orders
+  adminListOrders: () => request('/api/admin/orders', { authed: true }),
+};
