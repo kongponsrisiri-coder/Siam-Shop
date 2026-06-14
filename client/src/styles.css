@@ -30,6 +30,10 @@ a:hover { text-decoration: underline; }
 .brand { font-weight: 800; font-size: 20px; color: var(--siam-red); }
 .brand span { color: var(--siam-gold); }
 .navlinks a { margin-left: 18px; font-weight: 600; color: var(--ink); }
+/* Subtle staff shortcuts, separated from the customer links */
+.staff-links { margin-left: 18px; padding-left: 14px; border-left: 1px solid var(--line); }
+.navlinks .staff-link { margin-left: 12px; font-size: 13px; font-weight: 600; color: var(--muted); }
+.navlinks .staff-link:hover { color: var(--siam-red); }
 
 /* Buttons */
 .btn {
