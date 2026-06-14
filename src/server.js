@@ -15,6 +15,7 @@ const fs = require('fs');
 const { pool, initDB, getShopIdBySlug } = require('./db/database');
 const stripeService = require('./services/stripeService');
 const aiService = require('./services/aiService');
+const delivery = require('./services/delivery');
 
 const app = express();
 
@@ -95,6 +96,24 @@ async function resolveShopId(req) {
   return getShopIdBySlug(slug);
 }
 
+// Load a shop's settings as a plain { key: value } object.
+async function getSettings(shopId) {
+  const { rows } = await pool.query(`SELECT key, value FROM shop_settings WHERE shop_id = $1`, [shopId]);
+  const out = {};
+  for (const r of rows) out[r.key] = r.value;
+  return out;
+}
+
+// Compute the delivery fee for a postcode against a shop's settings.
+// Returns { zone, label, fee } or null for an invalid postcode.
+function quoteDelivery(settings, postcode) {
+  const zone = delivery.classifyZone(postcode);
+  if (!zone) return null;
+  const feeKey = { london: 'delivery_fee_london', mainland: 'delivery_fee_mainland', remote: 'delivery_fee_remote' }[zone];
+  const fee = Number(settings[feeKey] ?? settings.delivery_fee_mainland ?? 0);
+  return { zone, label: delivery.ZONE_LABELS[zone], fee };
+}
+
 // ---------------------------------------------------------------------------
 // Health
 // ---------------------------------------------------------------------------
@@ -159,6 +178,79 @@ app.get('/api/shop', async (req, res) => {
   }
 });
 
+// Public shop settings the storefront needs (min order, delivery fees, restock).
+app.get('/api/settings', async (req, res) => {
+  try {
+    const shopId = await resolveShopId(req);
+    if (!shopId) return res.status(404).json({ error: 'Shop not found' });
+    const s = await getSettings(shopId);
+    res.json({
+      minimum_order_amount: Number(s.minimum_order_amount || 0),
+      delivery_fee_london: Number(s.delivery_fee_london || 0),
+      delivery_fee_mainland: Number(s.delivery_fee_mainland || 0),
+      delivery_fee_remote: Number(s.delivery_fee_remote || 0),
+      restock_day: s.restock_day || null,
+      currency: s.currency || 'GBP',
+      shop_language_default: s.shop_language_default || 'en',
+    });
+  } catch (err) {
+    console.error('[settings]', err.message);
+    res.status(500).json({ error: 'Failed to load settings' });
+  }
+});
+
+// Public category list (ordered).
+app.get('/api/categories', async (req, res) => {
+  try {
+    const shopId = await resolveShopId(req);
+    if (!shopId) return res.status(404).json({ error: 'Shop not found' });
+    const { rows } = await pool.query(
+      `SELECT id, name, name_th, sort_order FROM categories WHERE shop_id = $1 ORDER BY sort_order, name`,
+      [shopId]
+    );
+    res.json(rows);
+  } catch (err) {
+    console.error('[categories]', err.message);
+    res.status(500).json({ error: 'Failed to load categories' });
+  }
+});
+
+// Delivery quote for a postcode.
+app.post('/api/delivery-quote', async (req, res) => {
+  try {
+    const shopId = await resolveShopId(req);
+    if (!shopId) return res.status(404).json({ error: 'Shop not found' });
+    const settings = await getSettings(shopId);
+    const quote = quoteDelivery(settings, req.body?.postcode);
+    if (!quote) return res.status(400).json({ error: 'Enter a valid UK postcode' });
+    res.json(quote);
+  } catch (err) {
+    console.error('[delivery-quote]', err.message);
+    res.status(500).json({ error: 'Failed to quote delivery' });
+  }
+});
+
+// "Notify me when back in stock" capture (SIAMSHOP-010).
+app.post('/api/products/:id/notify', async (req, res) => {
+  try {
+    const shopId = await resolveShopId(req);
+    if (!shopId) return res.status(404).json({ error: 'Shop not found' });
+    const email = String(req.body?.email || '').trim();
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return res.status(400).json({ error: 'Enter a valid email' });
+    const { rows } = await pool.query(`SELECT id FROM products WHERE id = $1 AND shop_id = $2`, [req.params.id, shopId]);
+    if (!rows[0]) return res.status(404).json({ error: 'Product not found' });
+    await pool.query(
+      `INSERT INTO stock_notifications (shop_id, product_id, email)
+       VALUES ($1,$2,$3) ON CONFLICT (product_id, email) DO NOTHING`,
+      [shopId, req.params.id, email]
+    );
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('[notify]', err.message);
+    res.status(500).json({ error: 'Failed to register' });
+  }
+});
+
 // Public product listing — active products only, optional category/search.
 app.get('/api/products', async (req, res) => {
   try {
@@ -166,18 +258,21 @@ app.get('/api/products', async (req, res) => {
     if (!shopId) return res.status(404).json({ error: 'Shop not found' });
 
     const params = [shopId];
-    let sql = `SELECT id, name, name_th, description, price, stock_qty, category, image_url
-               FROM products
-               WHERE shop_id = $1 AND is_active = TRUE`;
-    if (req.query.category) {
-      params.push(req.query.category);
-      sql += ` AND category = $${params.length}`;
+    let sql = `SELECT p.id, p.name, p.name_th, p.description, p.description_th, p.price,
+                      p.stock_qty, p.track_stock, p.image_url, p.weight_grams,
+                      p.category_id, c.name AS category, c.name_th AS category_th
+               FROM products p
+               LEFT JOIN categories c ON c.id = p.category_id
+               WHERE p.shop_id = $1 AND p.is_active = TRUE`;
+    if (req.query.category_id) {
+      params.push(req.query.category_id);
+      sql += ` AND p.category_id = $${params.length}`;
     }
     if (req.query.q) {
       params.push(`%${req.query.q}%`);
-      sql += ` AND (name ILIKE $${params.length} OR name_th ILIKE $${params.length})`;
+      sql += ` AND (p.name ILIKE $${params.length} OR p.name_th ILIKE $${params.length})`;
     }
-    sql += ` ORDER BY category NULLS LAST, name`;
+    sql += ` ORDER BY c.sort_order NULLS LAST, p.sort_order, p.name`;
     const { rows } = await pool.query(sql, params);
     res.json(rows);
   } catch (err) {
@@ -235,9 +330,12 @@ app.get('/api/admin/products', requireAuth, async (req, res) => {
     const shopId = await resolveShopId(req);
     if (!shopId) return res.status(404).json({ error: 'Shop not found' });
     const { rows } = await pool.query(
-      `SELECT id, name, name_th, description, barcode, sku, unit, price, cost_price,
-              stock_qty, category, image_url, is_active, created_at
-       FROM products WHERE shop_id = $1 ORDER BY created_at DESC`,
+      `SELECT p.id, p.name, p.name_th, p.description, p.description_th, p.barcode, p.sku, p.unit,
+              p.price, p.cost_price, p.stock_qty, p.track_stock, p.weight_grams, p.sort_order,
+              p.category_id, c.name AS category, p.image_url, p.is_active, p.created_at
+       FROM products p
+       LEFT JOIN categories c ON c.id = p.category_id
+       WHERE p.shop_id = $1 ORDER BY p.created_at DESC`,
       [shopId]
     );
     res.json(rows);
@@ -251,24 +349,31 @@ app.post('/api/admin/products', requireAuth, async (req, res) => {
   try {
     const shopId = await resolveShopId(req);
     if (!shopId) return res.status(404).json({ error: 'Shop not found' });
-    const { name, name_th, description, barcode, sku, unit, price, cost_price, stock_qty, category, image_url, is_active } = req.body || {};
+    const { name, name_th, description, description_th, barcode, sku, unit, price, cost_price,
+            stock_qty, track_stock, weight_grams, sort_order, category_id, image_url, is_active } = req.body || {};
     if (!name || !String(name).trim()) return res.status(400).json({ error: 'Name is required' });
     const { rows } = await pool.query(
-      `INSERT INTO products (shop_id, name, name_th, description, barcode, sku, unit, price, cost_price, stock_qty, category, image_url, is_active)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+      `INSERT INTO products (shop_id, name, name_th, description, description_th, barcode, sku, unit,
+                             price, cost_price, stock_qty, track_stock, weight_grams, sort_order,
+                             category_id, image_url, is_active)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
        RETURNING *`,
       [
         shopId,
         String(name).trim(),
         name_th || null,
         description || null,
+        description_th || null,
         barcode ? String(barcode).trim() : null,
         sku ? String(sku).trim() : null,
         unit || 'each',
         Number(price) || 0,
         Number(cost_price) || 0,
         Number.isInteger(stock_qty) ? stock_qty : Number(stock_qty) || 0,
-        category || null,
+        track_stock !== false,
+        weight_grams != null ? Number(weight_grams) : null,
+        Number(sort_order) || 0,
+        category_id || null,
         image_url || null,
         is_active !== false,
       ]
@@ -285,21 +390,26 @@ app.put('/api/admin/products/:id', requireAuth, async (req, res) => {
   try {
     const shopId = await resolveShopId(req);
     if (!shopId) return res.status(404).json({ error: 'Shop not found' });
-    const { name, name_th, description, barcode, sku, unit, price, cost_price, stock_qty, category, image_url, is_active } = req.body || {};
+    const { name, name_th, description, description_th, barcode, sku, unit, price, cost_price,
+            stock_qty, track_stock, weight_grams, sort_order, category_id, image_url, is_active } = req.body || {};
     const { rows } = await pool.query(
       `UPDATE products SET
          name = COALESCE($3, name),
          name_th = $4,
          description = $5,
-         barcode = $6,
-         sku = $7,
-         unit = COALESCE($8, unit),
-         price = COALESCE($9, price),
-         cost_price = COALESCE($10, cost_price),
-         stock_qty = COALESCE($11, stock_qty),
-         category = $12,
-         image_url = $13,
-         is_active = COALESCE($14, is_active)
+         description_th = $6,
+         barcode = $7,
+         sku = $8,
+         unit = COALESCE($9, unit),
+         price = COALESCE($10, price),
+         cost_price = COALESCE($11, cost_price),
+         stock_qty = COALESCE($12, stock_qty),
+         track_stock = COALESCE($13, track_stock),
+         weight_grams = $14,
+         sort_order = COALESCE($15, sort_order),
+         category_id = $16,
+         image_url = $17,
+         is_active = COALESCE($18, is_active)
        WHERE id = $1 AND shop_id = $2
        RETURNING *`,
       [
@@ -308,13 +418,17 @@ app.put('/api/admin/products/:id', requireAuth, async (req, res) => {
         name != null ? String(name).trim() : null,
         name_th ?? null,
         description ?? null,
+        description_th ?? null,
         barcode ? String(barcode).trim() : null,
         sku ? String(sku).trim() : null,
         unit ?? null,
         price != null ? Number(price) : null,
         cost_price != null ? Number(cost_price) : null,
         stock_qty != null ? Number(stock_qty) : null,
-        category ?? null,
+        track_stock != null ? Boolean(track_stock) : null,
+        weight_grams != null ? Number(weight_grams) : null,
+        sort_order != null ? Number(sort_order) : null,
+        category_id || null,
         image_url ?? null,
         is_active != null ? Boolean(is_active) : null,
       ]
@@ -341,6 +455,93 @@ app.delete('/api/admin/products/:id', requireAuth, async (req, res) => {
   } catch (err) {
     console.error('[admin/products DELETE]', err.message);
     res.status(500).json({ error: 'Failed to delete product' });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Admin — settings (self-service, SIAMSHOP-007/010)
+// ---------------------------------------------------------------------------
+app.get('/api/admin/settings', requireAuth, async (req, res) => {
+  try {
+    const shopId = await resolveShopId(req);
+    if (!shopId) return res.status(404).json({ error: 'Shop not found' });
+    res.json(await getSettings(shopId));
+  } catch (err) {
+    console.error('[admin/settings]', err.message);
+    res.status(500).json({ error: 'Failed to load settings' });
+  }
+});
+
+app.put('/api/admin/settings', requireAuth, async (req, res) => {
+  try {
+    const shopId = await resolveShopId(req);
+    if (!shopId) return res.status(404).json({ error: 'Shop not found' });
+    const updates = req.body || {};
+    for (const [key, value] of Object.entries(updates)) {
+      await pool.query(
+        `INSERT INTO shop_settings (shop_id, key, value) VALUES ($1,$2,$3)
+         ON CONFLICT (shop_id, key) DO UPDATE SET value = EXCLUDED.value`,
+        [shopId, key, String(value)]
+      );
+    }
+    res.json(await getSettings(shopId));
+  } catch (err) {
+    console.error('[admin/settings PUT]', err.message);
+    res.status(500).json({ error: 'Failed to save settings' });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Admin — category management (SIAMSHOP-002)
+// ---------------------------------------------------------------------------
+app.post('/api/admin/categories', requireAuth, async (req, res) => {
+  try {
+    const shopId = await resolveShopId(req);
+    if (!shopId) return res.status(404).json({ error: 'Shop not found' });
+    const { name, name_th, sort_order } = req.body || {};
+    if (!name || !String(name).trim()) return res.status(400).json({ error: 'Name is required' });
+    const { rows } = await pool.query(
+      `INSERT INTO categories (shop_id, name, name_th, sort_order) VALUES ($1,$2,$3,$4) RETURNING *`,
+      [shopId, String(name).trim(), name_th || null, Number(sort_order) || 0]
+    );
+    res.status(201).json(rows[0]);
+  } catch (err) {
+    if (err.code === '23505') return res.status(409).json({ error: 'A category with that name already exists' });
+    console.error('[admin/categories POST]', err.message);
+    res.status(500).json({ error: 'Failed to create category' });
+  }
+});
+
+app.put('/api/admin/categories/:id', requireAuth, async (req, res) => {
+  try {
+    const shopId = await resolveShopId(req);
+    if (!shopId) return res.status(404).json({ error: 'Shop not found' });
+    const { name, name_th, sort_order } = req.body || {};
+    const { rows } = await pool.query(
+      `UPDATE categories SET name = COALESCE($3, name), name_th = $4, sort_order = COALESCE($5, sort_order)
+       WHERE id = $1 AND shop_id = $2 RETURNING *`,
+      [req.params.id, shopId, name != null ? String(name).trim() : null, name_th ?? null,
+       sort_order != null ? Number(sort_order) : null]
+    );
+    if (!rows[0]) return res.status(404).json({ error: 'Category not found' });
+    res.json(rows[0]);
+  } catch (err) {
+    if (err.code === '23505') return res.status(409).json({ error: 'A category with that name already exists' });
+    console.error('[admin/categories PUT]', err.message);
+    res.status(500).json({ error: 'Failed to update category' });
+  }
+});
+
+app.delete('/api/admin/categories/:id', requireAuth, async (req, res) => {
+  try {
+    const shopId = await resolveShopId(req);
+    if (!shopId) return res.status(404).json({ error: 'Shop not found' });
+    const { rowCount } = await pool.query(`DELETE FROM categories WHERE id = $1 AND shop_id = $2`, [req.params.id, shopId]);
+    if (!rowCount) return res.status(404).json({ error: 'Category not found' });
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('[admin/categories DELETE]', err.message);
+    res.status(500).json({ error: 'Failed to delete category' });
   }
 });
 
