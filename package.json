@@ -5,6 +5,7 @@
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",
+    "build": "npm --prefix client install --include=dev && npm --prefix client run build",
     "dev": "node --watch src/server.js",
     "seed": "node scripts/seed-demo.js",
     "import-products": "node scripts/import-products.js",
