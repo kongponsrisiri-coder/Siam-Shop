@@ -31,12 +31,11 @@ function TopBar() {
   return (
     <div className="topbar">
       <Link to="/" className="brand">Siam<span>Shop</span></Link>
+      {/* Customer-facing nav only. Staff reach /till, /scan and /admin by URL
+          (all are login-gated) — they're intentionally not advertised here. */}
       <div className="navlinks">
         <Link to="/">{t('shop')}</Link>
         <Link to="/cart">{t('cart')}{count > 0 ? ` (${count})` : ''}</Link>
-        <Link to="/till">Till</Link>
-        <Link to="/scan">Scanner</Link>
-        <Link to="/admin">Admin</Link>
         <LangToggle />
       </div>
     </div>
