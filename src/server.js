@@ -114,6 +114,148 @@ function quoteDelivery(settings, postcode) {
   return { zone, label: delivery.ZONE_LABELS[zone], fee };
 }
 
+// Upsert a customer by (shop, email) and return its id.
+async function upsertCustomer(client, shopId, customer) {
+  const email = String(customer?.email || '').trim().toLowerCase();
+  if (!email) return null;
+  const { rows } = await client.query(
+    `INSERT INTO customers (shop_id, email, name, phone, marketing_consent)
+     VALUES ($1,$2,$3,$4,$5)
+     ON CONFLICT (shop_id, email) DO UPDATE SET
+       name = COALESCE(EXCLUDED.name, customers.name),
+       phone = COALESCE(EXCLUDED.phone, customers.phone),
+       marketing_consent = EXCLUDED.marketing_consent
+     RETURNING id`,
+    [shopId, email, customer?.name || null, customer?.phone || null, Boolean(customer?.marketing_consent)]
+  );
+  return rows[0].id;
+}
+
+// Create a PENDING online order from a basket. Recomputes all prices and the
+// delivery fee server-side (never trusts the client), enforces the minimum
+// order, and writes order + items. Stock is NOT decremented here — that happens
+// on fulfilment (payment confirmed). Shared by website checkout, bank transfer,
+// and (later) the Messenger bot. Returns { orderId, subtotal, deliveryFee, total }.
+async function createPendingOrder(client, shopId, body, { paymentMethod, source }) {
+  const items = Array.isArray(body?.items) ? body.items : [];
+  if (items.length === 0) throw httpError(400, 'Your basket is empty');
+
+  const settings = await getSettings(shopId);
+  const quote = quoteDelivery(settings, body?.postcode);
+  if (!quote) throw httpError(400, 'Enter a valid UK postcode for delivery');
+
+  // Recompute subtotal from live prices + snapshot each line.
+  let subtotal = 0;
+  const lines = [];
+  for (const it of items) {
+    const qty = Number(it.qty);
+    if (!Number.isInteger(qty) || qty <= 0) throw httpError(400, 'Invalid quantity');
+    const { rows } = await client.query(
+      `SELECT id, name, price FROM products WHERE id = $1 AND shop_id = $2 AND is_active = TRUE`,
+      [it.product_id, shopId]
+    );
+    const p = rows[0];
+    if (!p) throw httpError(404, `Product ${it.product_id} is unavailable`);
+    const lineTotal = Number(p.price) * qty;
+    subtotal += lineTotal;
+    lines.push({ product: p, qty, lineTotal });
+  }
+
+  const minOrder = Number(settings.minimum_order_amount || 0);
+  if (subtotal < minOrder) {
+    throw httpError(400, `Minimum order is £${minOrder.toFixed(2)} (your items total £${subtotal.toFixed(2)})`);
+  }
+
+  const deliveryFee = quote.fee;
+  const total = subtotal + deliveryFee;
+  const customerId = await upsertCustomer(client, shopId, body?.customer);
+
+  const orderRes = await client.query(
+    `INSERT INTO orders (shop_id, customer_id, channel, source, status, subtotal, delivery_fee, total,
+                         payment_method, payment_status, delivery_address, notes)
+     VALUES ($1,$2,'online',$3,'pending',$4,$5,$6,$7,'pending',$8,$9)
+     RETURNING id, created_at`,
+    [shopId, customerId, source, subtotal, deliveryFee, total, paymentMethod,
+     body?.delivery_address || null, body?.notes || null]
+  );
+  const orderId = orderRes.rows[0].id;
+
+  for (const ln of lines) {
+    await client.query(
+      `INSERT INTO order_items (order_id, product_id, name_snapshot, price_snapshot, qty, line_total)
+       VALUES ($1,$2,$3,$4,$5,$6)`,
+      [orderId, ln.product.id, ln.product.name, ln.product.price, ln.qty, ln.lineTotal]
+    );
+  }
+
+  return { orderId, subtotal, deliveryFee, total, created_at: orderRes.rows[0].created_at };
+}
+
+// Fulfil an order once payment is confirmed: decrement stock + write movements
+// (reason online_sale), mark paid, and email the customer + shop. Idempotent —
+// safe to call from the Stripe webhook, the success page, and admin mark-paid.
+async function fulfilOrder(orderId) {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const { rows } = await client.query(`SELECT * FROM orders WHERE id = $1 FOR UPDATE`, [orderId]);
+    const order = rows[0];
+    if (!order) { await client.query('ROLLBACK'); return { ok: false, reason: 'not found' }; }
+    if (order.payment_status === 'paid') { await client.query('ROLLBACK'); return { ok: true, already: true }; }
+
+    const { rows: items } = await client.query(
+      `SELECT product_id, name_snapshot, qty, line_total FROM order_items WHERE order_id = $1`,
+      [orderId]
+    );
+    for (const it of items) {
+      if (!it.product_id) continue;
+      await client.query(
+        `UPDATE products SET stock_qty = stock_qty - $1 WHERE id = $2 AND track_stock = TRUE`,
+        [it.qty, it.product_id]
+      );
+      await client.query(
+        `INSERT INTO stock_movements (shop_id, product_id, change_qty, reason, ref_order_id)
+         VALUES ($1,$2,$3,'online_sale',$4)`,
+        [order.shop_id, it.product_id, -it.qty, orderId]
+      );
+    }
+    await client.query(`UPDATE orders SET payment_status = 'paid' WHERE id = $1`, [orderId]);
+    await client.query('COMMIT');
+
+    // Emails are best-effort (don't fail the order if Brevo is down/unset).
+    sendOrderEmails(order, items).catch((e) => console.warn('[email] order', orderId, e.message));
+    return { ok: true };
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('[fulfilOrder]', err.message);
+    return { ok: false, reason: err.message };
+  } finally {
+    client.release();
+  }
+}
+
+// Send the customer receipt + shop-owner notification for a paid order.
+async function sendOrderEmails(order, items) {
+  const { rows: shopRows } = await pool.query(`SELECT name FROM shops WHERE id = $1`, [order.shop_id]);
+  const shopName = shopRows[0]?.name || 'SiamShop';
+  const settings = await getSettings(order.shop_id);
+  const payload = {
+    id: order.id,
+    subtotal: order.subtotal,
+    delivery_fee: order.delivery_fee,
+    total: order.total,
+    delivery_address: order.delivery_address,
+    notes: order.notes,
+    items,
+  };
+  const { rows: custRows } = order.customer_id
+    ? await pool.query(`SELECT email FROM customers WHERE id = $1`, [order.customer_id])
+    : { rows: [] };
+  const customerEmail = custRows[0]?.email;
+  if (customerEmail) await emailService.sendOrderConfirmation(customerEmail, shopName, payload);
+  if (settings.shop_email) await emailService.sendShopNotification(settings.shop_email, shopName, payload);
+}
+
 // ---------------------------------------------------------------------------
 // Health
 // ---------------------------------------------------------------------------
@@ -248,6 +390,118 @@ app.post('/api/products/:id/notify', async (req, res) => {
   } catch (err) {
     console.error('[notify]', err.message);
     res.status(500).json({ error: 'Failed to register' });
+  }
+});
+
+// Card checkout — create a pending order + a Stripe Checkout Session (test mode).
+// Returns { url } to redirect to. If Stripe isn't configured, url is null and the
+// order is left pending (the shop can still see it).
+app.post('/api/checkout/session', async (req, res) => {
+  const shopId = await resolveShopId(req);
+  if (!shopId) return res.status(404).json({ error: 'Shop not found' });
+  const slug = (req.query.shop || process.env.DEFAULT_SHOP_SLUG || 'demo').toString();
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const order = await createPendingOrder(client, shopId, req.body, { paymentMethod: 'stripe', source: 'website' });
+    await client.query('COMMIT');
+
+    if (!stripeService.isConfigured()) {
+      return res.json({ url: null, order_id: order.orderId, message: 'Card payments not configured yet — order saved as pending.' });
+    }
+    const session = await stripeService.createCheckoutSession({
+      orderId: order.orderId,
+      shopSlug: slug,
+      lineItems: (await pool.query(
+        `SELECT name_snapshot AS name, price_snapshot, qty FROM order_items WHERE order_id = $1`,
+        [order.orderId]
+      )).rows.map((r) => ({ name: r.name, amount_pence: Math.round(Number(r.price_snapshot) * 100), qty: r.qty })),
+      deliveryFeePence: Math.round(order.deliveryFee * 100),
+      customerEmail: req.body?.customer?.email,
+    });
+    await pool.query(`UPDATE orders SET stripe_payment_intent_id = $1 WHERE id = $2`, [session.id, order.orderId]);
+    res.json({ url: session.url, order_id: order.orderId });
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    if (err.httpStatus) return res.status(err.httpStatus).json({ error: err.message });
+    console.error('[checkout/session]', err.message);
+    res.status(500).json({ error: 'Checkout failed' });
+  } finally {
+    client.release();
+  }
+});
+
+// Unified order creation for non-card payment (bank transfer) — also the entry
+// point the Messenger bot (SIAMSHOP-011) will call. Creates a pending order.
+app.post('/api/orders', async (req, res) => {
+  const shopId = await resolveShopId(req);
+  if (!shopId) return res.status(404).json({ error: 'Shop not found' });
+  const source = ['website', 'messenger', 'manual'].includes(req.body?.source) ? req.body.source : 'website';
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const order = await createPendingOrder(client, shopId, req.body, { paymentMethod: 'bank_transfer', source });
+    await client.query('COMMIT');
+    const settings = await getSettings(shopId);
+    res.status(201).json({
+      order_id: order.orderId,
+      total: order.total,
+      bank_instructions:
+        settings.bank_instructions ||
+        `Please transfer £${order.total.toFixed(2)} to the shop's bank account and quote order #${order.orderId}. Your order will be dispatched once payment is confirmed.`,
+    });
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    if (err.httpStatus) return res.status(err.httpStatus).json({ error: err.message });
+    console.error('[orders POST]', err.message);
+    res.status(500).json({ error: 'Failed to create order' });
+  } finally {
+    client.release();
+  }
+});
+
+// Public order summary (for the success/confirmation page). For a Stripe order
+// that has been paid but not yet fulfilled (e.g. webhook not wired in test mode),
+// this lazily fulfils it once Stripe confirms payment — idempotent.
+app.get('/api/orders/:id', async (req, res) => {
+  try {
+    const shopId = await resolveShopId(req);
+    if (!shopId) return res.status(404).json({ error: 'Shop not found' });
+    let { rows } = await pool.query(
+      `SELECT id, status, payment_status, payment_method, subtotal, delivery_fee, total,
+              delivery_address, stripe_payment_intent_id, created_at
+       FROM orders WHERE id = $1 AND shop_id = $2`,
+      [req.params.id, shopId]
+    );
+    let order = rows[0];
+    if (!order) return res.status(404).json({ error: 'Order not found' });
+
+    if (order.payment_status === 'pending' && order.payment_method === 'stripe' &&
+        order.stripe_payment_intent_id && stripeService.isConfigured()) {
+      try {
+        const session = await stripeService.retrieveSession(order.stripe_payment_intent_id);
+        if (session && session.payment_status === 'paid') {
+          await fulfilOrder(order.id);
+          ({ rows } = await pool.query(
+            `SELECT id, status, payment_status, payment_method, subtotal, delivery_fee, total, delivery_address, created_at
+             FROM orders WHERE id = $1`,
+            [order.id]
+          ));
+          order = rows[0];
+        }
+      } catch (e) {
+        console.warn('[orders GET] stripe confirm', e.message);
+      }
+    }
+
+    const { rows: items } = await pool.query(
+      `SELECT name_snapshot, qty, line_total FROM order_items WHERE order_id = $1`,
+      [order.id]
+    );
+    res.json({ ...order, items });
+  } catch (err) {
+    console.error('[orders GET]', err.message);
+    res.status(500).json({ error: 'Failed to load order' });
   }
 });
 
@@ -898,9 +1152,10 @@ app.get('/api/admin/orders', requireAuth, async (req, res) => {
     const shopId = await resolveShopId(req);
     if (!shopId) return res.status(404).json({ error: 'Shop not found' });
     const { rows } = await pool.query(
-      `SELECT o.id, o.channel, o.status, o.payment_status, o.payment_method,
-              o.subtotal, o.delivery_fee, o.total,
-              o.created_at, o.fulfilled_at, c.name AS customer_name, c.email AS customer_email
+      `SELECT o.id, o.channel, o.source, o.status, o.payment_status, o.payment_method,
+              o.subtotal, o.delivery_fee, o.total, o.created_at, o.fulfilled_at,
+              o.dispatch_date, o.tracking_number,
+              c.name AS customer_name, c.email AS customer_email
        FROM orders o
        LEFT JOIN customers c ON c.id = o.customer_id
        WHERE o.shop_id = $1
@@ -912,6 +1167,65 @@ app.get('/api/admin/orders', requireAuth, async (req, res) => {
   } catch (err) {
     console.error('[admin/orders]', err.message);
     res.status(500).json({ error: 'Failed to load orders' });
+  }
+});
+
+// Full order detail (items + customer + address) for the admin/packing slip.
+app.get('/api/admin/orders/:id', requireAuth, async (req, res) => {
+  try {
+    const shopId = await resolveShopId(req);
+    if (!shopId) return res.status(404).json({ error: 'Shop not found' });
+    const { rows } = await pool.query(
+      `SELECT o.*, c.name AS customer_name, c.email AS customer_email, c.phone AS customer_phone
+       FROM orders o LEFT JOIN customers c ON c.id = o.customer_id
+       WHERE o.id = $1 AND o.shop_id = $2`,
+      [req.params.id, shopId]
+    );
+    if (!rows[0]) return res.status(404).json({ error: 'Order not found' });
+    const { rows: items } = await pool.query(
+      `SELECT name_snapshot, price_snapshot, qty, line_total FROM order_items WHERE order_id = $1`,
+      [req.params.id]
+    );
+    res.json({ ...rows[0], items });
+  } catch (err) {
+    console.error('[admin/orders/:id]', err.message);
+    res.status(500).json({ error: 'Failed to load order' });
+  }
+});
+
+// Mark an order dispatched (+ optional tracking number).
+app.post('/api/admin/orders/:id/dispatch', requireAuth, async (req, res) => {
+  try {
+    const shopId = await resolveShopId(req);
+    if (!shopId) return res.status(404).json({ error: 'Shop not found' });
+    const { rows } = await pool.query(
+      `UPDATE orders SET status = 'dispatched', dispatch_date = COALESCE(dispatch_date, CURRENT_DATE),
+              tracking_number = $3, fulfilled_at = NOW()
+       WHERE id = $1 AND shop_id = $2 RETURNING *`,
+      [req.params.id, shopId, req.body?.tracking_number || null]
+    );
+    if (!rows[0]) return res.status(404).json({ error: 'Order not found' });
+    res.json(rows[0]);
+  } catch (err) {
+    console.error('[admin/orders dispatch]', err.message);
+    res.status(500).json({ error: 'Failed to mark dispatched' });
+  }
+});
+
+// Mark a (bank-transfer) order paid — fulfils it: decrements stock + emails.
+app.post('/api/admin/orders/:id/mark-paid', requireAuth, async (req, res) => {
+  try {
+    const shopId = await resolveShopId(req);
+    if (!shopId) return res.status(404).json({ error: 'Shop not found' });
+    const { rows } = await pool.query(`SELECT id FROM orders WHERE id = $1 AND shop_id = $2`, [req.params.id, shopId]);
+    if (!rows[0]) return res.status(404).json({ error: 'Order not found' });
+    const r = await fulfilOrder(Number(req.params.id));
+    if (!r.ok) return res.status(500).json({ error: r.reason || 'Failed to mark paid' });
+    const { rows: updated } = await pool.query(`SELECT * FROM orders WHERE id = $1`, [req.params.id]);
+    res.json(updated[0]);
+  } catch (err) {
+    console.error('[admin/orders mark-paid]', err.message);
+    res.status(500).json({ error: 'Failed to mark paid' });
   }
 });
 
@@ -927,10 +1241,15 @@ app.post('/api/stripe/webhook', async (req, res) => {
     return res.status(400).send(`Webhook Error: ${err.message}`);
   }
 
-  // SIAMSHOP-003/009 will fulfil orders here: on checkout.session.completed,
-  // verify the amount server-side, mark the order paid, decrement stock, and
-  // send confirmation emails. For now we just acknowledge receipt.
-  console.log('[stripe] received event:', event.type);
+  // Fulfil the order on successful payment: mark paid, decrement stock, email.
+  if (event.type === 'checkout.session.completed') {
+    const session = event.data.object;
+    const orderId = session.metadata?.order_id;
+    if (orderId && session.payment_status === 'paid') {
+      const r = await fulfilOrder(Number(orderId));
+      console.log('[stripe] fulfil order', orderId, r.ok ? (r.already ? '(already)' : 'OK') : 'FAILED');
+    }
+  }
   res.json({ received: true });
 });
 

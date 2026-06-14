@@ -5,20 +5,24 @@ const EMPTY = {
   name: '',
   name_th: '',
   description: '',
+  description_th: '',
   barcode: '',
   sku: '',
   unit: 'each',
   price: '',
   cost_price: '',
   stock_qty: '',
-  category: '',
+  track_stock: true,
+  weight_grams: '',
+  sort_order: '',
+  category_id: '',
   image_url: '',
   is_active: true,
 };
 
 const UNITS = ['each', 'kg', 'g', 'pack', 'bottle', 'can', 'box'];
 
-function ProductForm({ initial, onSave, onCancel }) {
+function ProductForm({ initial, categories, onSave, onCancel }) {
   const [form, setForm] = useState({ ...EMPTY, ...initial });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
@@ -37,6 +41,10 @@ function ProductForm({ initial, onSave, onCancel }) {
         price: Number(form.price) || 0,
         cost_price: Number(form.cost_price) || 0,
         stock_qty: Number(form.stock_qty) || 0,
+        weight_grams: form.weight_grams === '' ? null : Number(form.weight_grams),
+        sort_order: form.sort_order === '' ? null : Number(form.sort_order),
+        category_id: form.category_id === '' ? null : Number(form.category_id),
+        track_stock: !!form.track_stock,
       });
     } catch (err) {
       setError(err.message);
@@ -60,6 +68,8 @@ function ProductForm({ initial, onSave, onCancel }) {
       </div>
       <label>Description</label>
       <textarea rows="3" value={form.description || ''} onChange={(e) => set('description', e.target.value)} />
+      <label>Description (Thai)</label>
+      <textarea rows="3" value={form.description_th || ''} onChange={(e) => set('description_th', e.target.value)} />
       <div className="row" style={{ gap: 12, flexWrap: 'wrap' }}>
         <div style={{ flex: '1 1 200px' }}>
           <label>Barcode (EAN/UPC)</label>
@@ -89,14 +99,38 @@ function ProductForm({ initial, onSave, onCancel }) {
           <label>Stock qty</label>
           <input type="number" value={form.stock_qty} onChange={(e) => set('stock_qty', e.target.value)} />
         </div>
-        <div style={{ flex: '1 1 140px' }}>
+        <div style={{ flex: '1 1 160px' }}>
           <label>Category</label>
-          <input value={form.category || ''} onChange={(e) => set('category', e.target.value)} />
+          <select value={form.category_id ?? ''} onChange={(e) => set('category_id', e.target.value)}>
+            <option value="">— none —</option>
+            {categories.map((c) => (
+              <option key={c.id} value={c.id}>{c.name}{c.name_th ? ` / ${c.name_th}` : ''}</option>
+            ))}
+          </select>
+        </div>
+      </div>
+      <div className="row" style={{ gap: 12, flexWrap: 'wrap' }}>
+        <div style={{ flex: '1 1 130px' }}>
+          <label>Weight (grams)</label>
+          <input type="number" value={form.weight_grams ?? ''} onChange={(e) => set('weight_grams', e.target.value)} />
+        </div>
+        <div style={{ flex: '1 1 110px' }}>
+          <label>Sort order</label>
+          <input type="number" value={form.sort_order ?? ''} onChange={(e) => set('sort_order', e.target.value)} />
         </div>
       </div>
       <label>Image URL</label>
       <input value={form.image_url || ''} onChange={(e) => set('image_url', e.target.value)} />
       <label className="row" style={{ marginTop: 12, gap: 8 }}>
+        <input
+          type="checkbox"
+          style={{ width: 'auto' }}
+          checked={!!form.track_stock}
+          onChange={(e) => set('track_stock', e.target.checked)}
+        />
+        <span>Track stock (show out-of-stock & notify-me)</span>
+      </label>
+      <label className="row" style={{ marginTop: 8, gap: 8 }}>
         <input
           type="checkbox"
           style={{ width: 'auto' }}
@@ -116,6 +150,7 @@ function ProductForm({ initial, onSave, onCancel }) {
 
 export default function ProductsSection() {
   const [products, setProducts] = useState([]);
+  const [categories, setCategories] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [editing, setEditing] = useState(null); // null | {} | product
@@ -124,7 +159,12 @@ export default function ProductsSection() {
     setLoading(true);
     setError('');
     try {
-      setProducts(await api.adminListProducts());
+      const [prods, cats] = await Promise.all([
+        api.adminListProducts(),
+        api.getCategories().catch(() => []),
+      ]);
+      setProducts(prods);
+      setCategories(cats || []);
     } catch (err) {
       setError(err.message);
     } finally {
@@ -153,7 +193,14 @@ export default function ProductsSection() {
   }
 
   if (editing !== null) {
-    return <ProductForm initial={editing} onSave={handleSave} onCancel={() => setEditing(null)} />;
+    return (
+      <ProductForm
+        initial={editing}
+        categories={categories}
+        onSave={handleSave}
+        onCancel={() => setEditing(null)}
+      />
+    );
   }
 
   return (
@@ -170,7 +217,7 @@ export default function ProductsSection() {
       {!loading && !error && (
         <div className="panel">
           {products.length === 0 ? (
-            <p className="muted center">No products yet. Click “New product” to add one.</p>
+            <p className="muted center">No products yet. Click "New product" to add one.</p>
           ) : (
             <table>
               <thead>
@@ -193,7 +240,7 @@ export default function ProductsSection() {
                     </td>
                     <td>{p.category || '—'}</td>
                     <td>£{Number(p.price).toFixed(2)}</td>
-                    <td>{p.stock_qty}</td>
+                    <td>{p.track_stock ? p.stock_qty : '∞'}</td>
                     <td>
                       <span className={`tag ${p.is_active ? '' : 'off'}`}>
                         {p.is_active ? 'Active' : 'Hidden'}

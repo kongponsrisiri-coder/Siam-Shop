@@ -1,23 +1,41 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useCart } from '../cart.jsx';
+import { useT } from '../lang.jsx';
+import { api } from '../api.js';
 
 export default function CartScreen() {
   const { items, setQty, remove, subtotal } = useCart();
   const navigate = useNavigate();
+  const t = useT();
+  const [minOrder, setMinOrder] = useState(0);
+
+  useEffect(() => {
+    let live = true;
+    api
+      .getSettings()
+      .then((s) => live && setMinOrder(Number(s?.minimum_order_amount) || 0))
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, []);
 
   if (items.length === 0) {
     return (
       <div className="container center">
         <p className="muted">Your cart is empty.</p>
-        <Link className="btn" to="/">Browse products</Link>
+        <Link className="btn" to="/">{t('keepShopping')}</Link>
       </div>
     );
   }
 
+  const belowMin = minOrder > 0 && subtotal < minOrder;
+  const shortfall = belowMin ? minOrder - subtotal : 0;
+
   return (
     <div className="container">
-      <h1>Your cart</h1>
+      <h1>{t('cart')}</h1>
       <div className="panel">
         <table>
           <thead>
@@ -55,16 +73,29 @@ export default function CartScreen() {
         <div className="row" style={{ marginTop: 16 }}>
           <div className="spacer" />
           <div style={{ textAlign: 'right' }}>
-            <div className="muted">Subtotal</div>
+            <div className="muted">{t('subtotal')}</div>
             <div style={{ fontSize: 22, fontWeight: 800 }}>£{subtotal.toFixed(2)}</div>
-            <div className="muted" style={{ fontSize: 12 }}>Delivery calculated at checkout</div>
+            <div className="muted" style={{ fontSize: 12 }}>{t('deliveryAtCheckout')}</div>
           </div>
         </div>
 
+        {belowMin && (
+          <div className="min-warn">
+            {t('minOrder')}: <strong>£{minOrder.toFixed(2)}</strong> — {t('addMore')}{' '}
+            <strong>£{shortfall.toFixed(2)}</strong> {t('moreToCheckout')}.
+          </div>
+        )}
+
         <div className="row" style={{ marginTop: 16 }}>
-          <Link className="btn secondary" to="/">Keep shopping</Link>
+          <Link className="btn secondary" to="/">{t('keepShopping')}</Link>
           <div className="spacer" />
-          <button className="btn" onClick={() => navigate('/checkout')}>Checkout →</button>
+          <button
+            className="btn"
+            disabled={belowMin}
+            onClick={() => navigate('/checkout')}
+          >
+            {t('checkout')} →
+          </button>
         </div>
       </div>
     </div>

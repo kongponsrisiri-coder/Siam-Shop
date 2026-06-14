@@ -49,6 +49,18 @@ export const api = {
   },
   getProduct: (id) => request(`/api/products/${id}`),
 
+  // Public — settings, categories, stock notify, delivery, checkout, orders
+  getSettings: () => request('/api/settings'),
+  getCategories: () => request('/api/categories'),
+  notifyMe: (id, email) =>
+    request(`/api/products/${id}/notify`, { method: 'POST', body: { email } }),
+  deliveryQuote: (postcode) =>
+    request('/api/delivery-quote', { method: 'POST', body: { postcode } }),
+  checkoutSession: (body) =>
+    request('/api/checkout/session', { method: 'POST', body }),
+  createOrder: (body) => request('/api/orders', { method: 'POST', body }),
+  getOrder: (id) => request(`/api/orders/${id}`),
+
   // Admin auth
   login: (password) => request('/api/admin/login', { method: 'POST', body: { password } }),
   me: () => request('/api/admin/me', { authed: true }),
@@ -59,8 +71,30 @@ export const api = {
   updateProduct: (id, p) => request(`/api/admin/products/${id}`, { method: 'PUT', body: p, authed: true }),
   deleteProduct: (id) => request(`/api/admin/products/${id}`, { method: 'DELETE', authed: true }),
 
+  // Admin settings
+  adminGetSettings: () => request('/api/admin/settings', { authed: true }),
+  adminUpdateSettings: (patch) =>
+    request('/api/admin/settings', { method: 'PUT', body: patch, authed: true }),
+
+  // Admin categories
+  adminCreateCategory: (c) =>
+    request('/api/admin/categories', { method: 'POST', body: c, authed: true }),
+  adminUpdateCategory: (id, c) =>
+    request(`/api/admin/categories/${id}`, { method: 'PUT', body: c, authed: true }),
+  adminDeleteCategory: (id) =>
+    request(`/api/admin/categories/${id}`, { method: 'DELETE', authed: true }),
+
   // Admin orders
   adminListOrders: () => request('/api/admin/orders', { authed: true }),
+  adminGetOrder: (id) => request(`/api/admin/orders/${id}`, { authed: true }),
+  adminDispatchOrder: (id, tracking_number) =>
+    request(`/api/admin/orders/${id}/dispatch`, {
+      method: 'POST',
+      body: { tracking_number },
+      authed: true,
+    }),
+  adminMarkPaid: (id) =>
+    request(`/api/admin/orders/${id}/mark-paid`, { method: 'POST', authed: true }),
 
   // In-store till (staff)
   lookupBarcode: (code) => request(`/api/products/lookup?barcode=${encodeURIComponent(code)}`, { authed: true }),
