@@ -167,6 +167,21 @@ th { color: var(--muted); font-weight: 600; }
   .checkout-grid .panel { margin: 16px 0; }
 }
 
+/* Admin dashboard */
+.kpi-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin: 12px 0; }
+.kpi {
+  background: #fff; border: 1px solid var(--line); border-top: 3px solid var(--line);
+  border-radius: 10px; padding: 14px 16px;
+}
+.kpi-label { color: var(--muted); font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .03em; }
+.kpi-value { font-size: 26px; font-weight: 800; margin-top: 4px; }
+.kpi-sub { color: var(--muted); font-size: 12px; margin-top: 2px; }
+.dash-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+@media (max-width: 760px) {
+  .kpi-grid { grid-template-columns: repeat(2, 1fr); }
+  .dash-cols { grid-template-columns: 1fr; }
+}
+
 /* Admin order list + packing slip */
 .order-row { cursor: pointer; }
 .order-row:hover { background: #fff8e1; }

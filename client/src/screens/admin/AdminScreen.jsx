@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { api, auth } from '../../api.js';
+import DashboardSection from './DashboardSection.jsx';
 import ProductsSection from './ProductsSection.jsx';
 import CategoriesSection from './CategoriesSection.jsx';
 import OrdersSection from './OrdersSection.jsx';
@@ -48,6 +49,7 @@ function LoginForm({ onLoggedIn }) {
 }
 
 const TABS = [
+  { key: 'dashboard', label: 'Dashboard', Comp: DashboardSection },
   { key: 'products', label: 'Products', Comp: ProductsSection },
   { key: 'categories', label: 'Categories', Comp: CategoriesSection },
   { key: 'orders', label: 'Orders', Comp: OrdersSection },
@@ -57,7 +59,7 @@ const TABS = [
 export default function AdminScreen() {
   const [authed, setAuthed] = useState(false);
   const [checking, setChecking] = useState(true);
-  const [tab, setTab] = useState('products');
+  const [tab, setTab] = useState('dashboard');
 
   useEffect(() => {
     if (!auth.get()) {
@@ -74,7 +76,7 @@ export default function AdminScreen() {
   if (checking) return <div className="container center muted">Loading…</div>;
   if (!authed) return <LoginForm onLoggedIn={() => setAuthed(true)} />;
 
-  const Active = TABS.find((t) => t.key === tab)?.Comp || ProductsSection;
+  const Active = TABS.find((t) => t.key === tab)?.Comp || DashboardSection;
 
   return (
     <div className="container">
@@ -104,7 +106,7 @@ export default function AdminScreen() {
         ))}
       </div>
 
-      <Active />
+      <Active onGoToOrders={() => setTab('orders')} />
     </div>
   );
 }

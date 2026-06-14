@@ -85,6 +85,9 @@ export const api = {
   adminDeleteCategory: (id) =>
     request(`/api/admin/categories/${id}`, { method: 'DELETE', authed: true }),
 
+  // Admin dashboard
+  adminDashboard: () => request('/api/admin/dashboard', { authed: true }),
+
   // Admin orders
   adminListOrders: () => request('/api/admin/orders', { authed: true }),
   adminGetOrder: (id) => request(`/api/admin/orders/${id}`, { authed: true }),

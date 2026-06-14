@@ -1318,6 +1318,91 @@ app.post('/api/admin/orders/:id/mark-paid', requireAuth, async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
+// Admin dashboard — the EPOS back-office overview (SIAMSHOP-401/402)
+// ---------------------------------------------------------------------------
+app.get('/api/admin/dashboard', requireAuth, async (req, res) => {
+  try {
+    const shopId = await resolveShopId(req);
+    if (!shopId) return res.status(404).json({ error: 'Shop not found' });
+    const LOW_STOCK = Number(req.query.low || 5);
+
+    // Sales totals over rolling periods (paid orders only), in one pass.
+    const sales = (await pool.query(
+      `SELECT
+         COALESCE(SUM(total) FILTER (WHERE created_at >= date_trunc('day',   now())),0)::numeric  AS day_gross,
+         COUNT(*)            FILTER (WHERE created_at >= date_trunc('day',   now()))              AS day_count,
+         COALESCE(SUM(total) FILTER (WHERE created_at >= date_trunc('week',  now())),0)::numeric  AS week_gross,
+         COUNT(*)            FILTER (WHERE created_at >= date_trunc('week',  now()))              AS week_count,
+         COALESCE(SUM(total) FILTER (WHERE created_at >= date_trunc('month', now())),0)::numeric  AS month_gross,
+         COUNT(*)            FILTER (WHERE created_at >= date_trunc('month', now()))              AS month_count,
+         COALESCE(SUM(total),0)::numeric AS all_gross,
+         COUNT(*)                        AS all_count
+       FROM orders WHERE shop_id = $1 AND payment_status = 'paid'`,
+      [shopId]
+    )).rows[0];
+
+    // Sales by channel (paid, all-time).
+    const byChannel = (await pool.query(
+      `SELECT channel, COUNT(*)::int AS count, COALESCE(SUM(total),0)::numeric AS gross
+       FROM orders WHERE shop_id = $1 AND payment_status = 'paid'
+       GROUP BY channel ORDER BY gross DESC`,
+      [shopId]
+    )).rows;
+
+    // Catalogue + fulfilment counts.
+    const counts = (await pool.query(
+      `SELECT
+         (SELECT COUNT(*) FROM products WHERE shop_id = $1)                                          AS products,
+         (SELECT COUNT(*) FROM products WHERE shop_id = $1 AND is_active)                             AS active_products,
+         (SELECT COUNT(*) FROM products WHERE shop_id = $1 AND track_stock AND stock_qty <= 0)        AS out_of_stock,
+         (SELECT COUNT(*) FROM orders   WHERE shop_id = $1 AND status = 'pending' AND payment_status='paid') AS to_dispatch,
+         (SELECT COUNT(*) FROM orders   WHERE shop_id = $1 AND payment_status = 'pending')            AS awaiting_payment`,
+      [shopId]
+    )).rows[0];
+
+    // Low-stock alerts.
+    const lowStock = (await pool.query(
+      `SELECT id, name, stock_qty, unit FROM products
+       WHERE shop_id = $1 AND track_stock AND stock_qty <= $2
+       ORDER BY stock_qty ASC, name LIMIT 12`,
+      [shopId, LOW_STOCK]
+    )).rows;
+
+    // Recent orders.
+    const recent = (await pool.query(
+      `SELECT o.id, o.channel, o.status, o.payment_status, o.total, o.created_at,
+              c.name AS customer_name
+       FROM orders o LEFT JOIN customers c ON c.id = o.customer_id
+       WHERE o.shop_id = $1 ORDER BY o.created_at DESC LIMIT 8`,
+      [shopId]
+    )).rows;
+
+    res.json({
+      sales: {
+        day:   { gross: Number(sales.day_gross),   count: Number(sales.day_count) },
+        week:  { gross: Number(sales.week_gross),  count: Number(sales.week_count) },
+        month: { gross: Number(sales.month_gross), count: Number(sales.month_count) },
+        all:   { gross: Number(sales.all_gross),   count: Number(sales.all_count) },
+      },
+      by_channel: byChannel.map((r) => ({ channel: r.channel, count: r.count, gross: Number(r.gross) })),
+      counts: {
+        products: Number(counts.products),
+        active_products: Number(counts.active_products),
+        out_of_stock: Number(counts.out_of_stock),
+        to_dispatch: Number(counts.to_dispatch),
+        awaiting_payment: Number(counts.awaiting_payment),
+      },
+      low_stock: lowStock,
+      recent_orders: recent,
+      low_stock_threshold: LOW_STOCK,
+    });
+  } catch (err) {
+    console.error('[admin/dashboard]', err.message);
+    res.status(500).json({ error: 'Failed to load dashboard' });
+  }
+});
+
+// ---------------------------------------------------------------------------
 // Stripe webhook (skeleton — full lifecycle in SIAMSHOP-009)
 // ---------------------------------------------------------------------------
 app.post('/api/stripe/webhook', async (req, res) => {
