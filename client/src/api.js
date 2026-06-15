@@ -76,6 +76,7 @@ export const api = {
   adminGetSettings: () => request('/api/admin/settings', { authed: true }),
   adminUpdateSettings: (patch) =>
     request('/api/admin/settings', { method: 'PUT', body: patch, authed: true }),
+  adminTestEmail: (to) => request('/api/admin/test-email', { method: 'POST', body: { to }, authed: true }),
 
   // Admin categories
   adminCreateCategory: (c) =>

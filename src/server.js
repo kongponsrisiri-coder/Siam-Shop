@@ -17,6 +17,7 @@ const stripeService = require('./services/stripeService');
 const aiService = require('./services/aiService');
 const delivery = require('./services/delivery');
 const messenger = require('./services/messengerService');
+const emailService = require('./services/emailService');
 
 const app = express();
 
@@ -837,6 +838,25 @@ app.put('/api/admin/settings', requireAuth, async (req, res) => {
   } catch (err) {
     console.error('[admin/settings PUT]', err.message);
     res.status(500).json({ error: 'Failed to save settings' });
+  }
+});
+
+// Email diagnostics — send a test email and surface Brevo's exact response.
+app.post('/api/admin/test-email', requireAuth, async (req, res) => {
+  const to = String(req.body?.to || '').trim();
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(to)) return res.status(400).json({ error: 'Enter a valid recipient email' });
+  const cfg = emailService.getEmailConfig();
+  if (!cfg.has_key) return res.status(503).json({ error: 'BREVO_API_KEY is not set on the server', from: cfg.from_email });
+  try {
+    await emailService.sendBrevoEmail(
+      to,
+      'SiamShop test email',
+      '<p>✅ This is a SiamShop test email. If you can read this, transactional email is working.</p>'
+    );
+    res.json({ ok: true, sent_to: to, from: cfg.from_email });
+  } catch (e) {
+    // e.message includes Brevo's response body (e.g. sender not valid)
+    res.status(502).json({ error: e.message, from: cfg.from_email });
   }
 });
 

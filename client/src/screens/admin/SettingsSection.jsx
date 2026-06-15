@@ -10,6 +10,7 @@ const FIELDS = [
   { key: 'delivery_fee_remote', label: 'Delivery fee — remote (£)', type: 'number', step: '0.01' },
   { key: 'restock_day', label: 'Restock day (e.g. Thursday)', type: 'text' },
   { key: 'currency', label: 'Currency (e.g. GBP)', type: 'text' },
+  { key: 'shop_email', label: 'Shop notification email (new orders)', type: 'email' },
 ];
 
 export default function SettingsSection() {
@@ -20,6 +21,23 @@ export default function SettingsSection() {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [testTo, setTestTo] = useState('');
+  const [testResult, setTestResult] = useState(null);
+  const [testBusy, setTestBusy] = useState(false);
+
+  async function sendTest(e) {
+    e.preventDefault();
+    setTestBusy(true);
+    setTestResult(null);
+    try {
+      const r = await api.adminTestEmail(testTo);
+      setTestResult({ ok: true, text: `Sent to ${r.sent_to} from ${r.from}. Check the inbox (and spam).` });
+    } catch (err) {
+      setTestResult({ ok: false, text: err.message });
+    } finally {
+      setTestBusy(false);
+    }
+  }
 
   async function load() {
     setLoading(true);
@@ -116,6 +134,28 @@ export default function SettingsSection() {
           </table>
         ) : (
           <p className="muted">Loading…</p>
+        )}
+      </div>
+
+      <div className="panel">
+        <h3 style={{ marginTop: 0 }}>Email test</h3>
+        <p className="muted" style={{ marginTop: 0, fontSize: 13 }}>
+          Sends a test email via Brevo and shows the exact result — handy for confirming the sender + key.
+        </p>
+        <form className="row" onSubmit={sendTest} style={{ gap: 8 }}>
+          <input
+            type="email"
+            placeholder="you@example.com"
+            value={testTo}
+            onChange={(e) => setTestTo(e.target.value)}
+            style={{ flex: '1 1 220px' }}
+          />
+          <button className="btn secondary" disabled={testBusy}>{testBusy ? 'Sending…' : 'Send test'}</button>
+        </form>
+        {testResult && (
+          <p style={{ marginTop: 8, fontSize: 13, color: testResult.ok ? '#16a34a' : 'var(--siam-red)' }}>
+            {testResult.ok ? '✅ ' : '❌ '}{testResult.text}
+          </p>
         )}
       </div>
 

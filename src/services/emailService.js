@@ -117,4 +117,13 @@ function sendShopNotification(shopEmail, shopName, order) {
   return sendBrevoEmail(shopEmail, `New order #${order.id} — ${shopName}`, html);
 }
 
-module.exports = { sendBrevoEmail, sendOrderConfirmation, sendShopNotification };
+// Report the current email configuration (for the admin diagnostics tool).
+function getEmailConfig() {
+  return {
+    has_key: Boolean(process.env.BREVO_API_KEY),
+    from_email: FROM_EMAIL,
+    from_name: FROM_NAME,
+  };
+}
+
+module.exports = { sendBrevoEmail, sendOrderConfirmation, sendShopNotification, getEmailConfig };
