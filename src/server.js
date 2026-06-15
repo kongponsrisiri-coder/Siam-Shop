@@ -265,8 +265,18 @@ async function fulfilOrder(orderId, baseUrl) {
 
 // Build a website link that pre-fills the cart from matched Messenger items, so
 // the customer completes delivery address + payment with the full website flow.
-function buildCartLink(lines) {
-  const frontend = (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
+// Public site base URL. Prefer an explicit base (e.g. derived from the live
+// request), then FRONTEND_URL, then Railway's auto-provided public domain, and
+// finally localhost for dev. This keeps Messenger links pointing at the real site.
+function publicBaseUrl(base) {
+  if (base) return base.replace(/\/$/, '');
+  if (process.env.FRONTEND_URL) return process.env.FRONTEND_URL.replace(/\/$/, '');
+  if (process.env.RAILWAY_PUBLIC_DOMAIN) return `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`;
+  return 'http://localhost:5173';
+}
+
+function buildCartLink(lines, base) {
+  const frontend = publicBaseUrl(base);
   const compact = lines.map((l) => ({ id: l.product_id, qty: l.qty }));
   const b64 = Buffer.from(JSON.stringify(compact)).toString('base64url');
   return `${frontend}/cart?cart=${b64}&src=messenger`;
@@ -274,7 +284,7 @@ function buildCartLink(lines) {
 
 // Parse a customer's Messenger order message, price it, and reply with a summary
 // + a ready-to-checkout link. This is the manual-bill-typing eliminator.
-async function handleMessengerOrder(shopId, senderId, text) {
+async function handleMessengerOrder(shopId, senderId, text, baseUrl) {
   const settings = await getSettings(shopId);
   const { rows: catalogue } = await pool.query(
     `SELECT id, name, name_th FROM products WHERE shop_id = $1 AND is_active = TRUE`,
@@ -327,7 +337,7 @@ async function handleMessengerOrder(shopId, senderId, text) {
     reply += '\n' + (th ? 'ไม่พบ: ' : "Couldn't find: ") + parsed.unmatched.join(', ');
   }
   reply += '\n\n' + (th ? 'ชำระเงินและกรอกที่อยู่จัดส่งที่นี่ค่ะ:\n' : 'Pay & enter delivery address here:\n') +
-    buildCartLink(lines);
+    buildCartLink(lines, baseUrl);
 
   await messenger.sendMessage(senderId, reply);
   console.log('[messenger] reply sent to', senderId, `(${lines.length} item(s), £${subtotal.toFixed(2)})`);
@@ -1969,9 +1979,10 @@ app.post('/api/messenger/webhook', async (req, res) => {
     console.warn('[messenger] no shop found for slug', process.env.DEFAULT_SHOP_SLUG || 'demo');
     return;
   }
+  const baseUrl = originFromReq(req);
   for (const m of messages) {
     console.log('[messenger] handling message from', m.senderId, ':', m.text);
-    handleMessengerOrder(shopId, m.senderId, m.text).catch((e) =>
+    handleMessengerOrder(shopId, m.senderId, m.text, baseUrl).catch((e) =>
       console.error('[messenger] handle', e.message)
     );
   }
