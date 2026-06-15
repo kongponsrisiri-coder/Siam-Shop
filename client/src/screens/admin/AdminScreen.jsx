@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { api, auth } from '../../api.js';
 import DashboardSection from './DashboardSection.jsx';
+import ReportsSection from './ReportsSection.jsx';
 import ProductsSection from './ProductsSection.jsx';
 import CategoriesSection from './CategoriesSection.jsx';
 import OrdersSection from './OrdersSection.jsx';
@@ -50,6 +51,7 @@ function LoginForm({ onLoggedIn }) {
 
 const TABS = [
   { key: 'dashboard', label: 'Dashboard', Comp: DashboardSection },
+  { key: 'reports', label: 'Reports', Comp: ReportsSection },
   { key: 'products', label: 'Products', Comp: ProductsSection },
   { key: 'categories', label: 'Categories', Comp: CategoriesSection },
   { key: 'orders', label: 'Orders', Comp: OrdersSection },

@@ -115,6 +115,28 @@ function sendOrderConfirmation(customerEmail, shopName, order, statusUrl) {
   return sendBrevoEmail(customerEmail, `Order #${order.id} confirmed — ${shopName}`, html);
 }
 
+// Bank-transfer instructions. Sent when a bank-transfer order is placed, so the
+// customer knows the amount + where to pay + the reference (order #).
+function sendBankTransferInstructions(customerEmail, shopName, order, bankDetails, statusUrl) {
+  const html = `
+    <div style="font-family:Arial,sans-serif;max-width:560px;margin:0 auto;color:#222;">
+      <h2>Order received — please pay by bank transfer</h2>
+      <p>${esc(shopName)} has received your order <strong>#${esc(order.id)}</strong>. To complete it,
+        please transfer the total below and we'll confirm once payment arrives.</p>
+      ${itemsTable(order.items)}
+      <p style="font-size:15px;margin-top:10px;"><strong>Total to pay: ${money(order.total)}</strong></p>
+      <div style="background:#fff8e1;border:1px solid #f2a900;border-radius:8px;padding:12px 14px;margin:14px 0;">
+        <strong>Bank details</strong>
+        <pre style="white-space:pre-wrap;font-family:inherit;margin:8px 0;font-size:14px;">${esc(bankDetails || 'Please contact the shop for bank details.')}</pre>
+        Please use <strong>order #${esc(order.id)}</strong> as the payment reference.
+      </div>
+      ${order.delivery_address ? `<p style="font-size:14px;">Delivering to:<br>${esc(order.delivery_address)}</p>` : ''}
+      ${trackButton(statusUrl)}
+      <p style="color:#888;font-size:12px;">SiamShop · Thai groceries, delivered.</p>
+    </div>`;
+  return sendBrevoEmail(customerEmail, `Order #${order.id} — please pay by bank transfer — ${shopName}`, html);
+}
+
 // Dispatch notification with tracking number. Sent when the shop marks the order
 // dispatched. order = { id, tracking_number, dispatch_date, delivery_address }
 function sendDispatchNotification(customerEmail, shopName, order, statusUrl) {
@@ -152,4 +174,7 @@ function getEmailConfig() {
   };
 }
 
-module.exports = { sendBrevoEmail, sendOrderConfirmation, sendDispatchNotification, sendShopNotification, getEmailConfig };
+module.exports = {
+  sendBrevoEmail, sendOrderConfirmation, sendBankTransferInstructions,
+  sendDispatchNotification, sendShopNotification, getEmailConfig,
+};

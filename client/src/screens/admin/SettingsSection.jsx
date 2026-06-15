@@ -11,6 +11,7 @@ const FIELDS = [
   { key: 'restock_day', label: 'Restock day (e.g. Thursday)', type: 'text' },
   { key: 'currency', label: 'Currency (e.g. GBP)', type: 'text' },
   { key: 'shop_email', label: 'Shop notification email (new orders)', type: 'email' },
+  { key: 'bank_details', label: 'Bank details (emailed to bank-transfer customers)', type: 'textarea' },
 ];
 
 export default function SettingsSection() {
@@ -94,14 +95,23 @@ export default function SettingsSection() {
           <h3 style={{ marginTop: 0 }}>Shop settings</h3>
           <div className="row" style={{ gap: 12, flexWrap: 'wrap' }}>
             {FIELDS.map((f) => (
-              <div key={f.key} style={{ flex: '1 1 220px' }}>
+              <div key={f.key} style={{ flex: f.type === 'textarea' ? '1 1 100%' : '1 1 220px' }}>
                 <label>{f.label}</label>
-                <input
-                  type={f.type}
-                  step={f.step}
-                  value={form[f.key] ?? ''}
-                  onChange={(e) => set(f.key, e.target.value)}
-                />
+                {f.type === 'textarea' ? (
+                  <textarea
+                    rows="4"
+                    placeholder="Account name&#10;Sort code: 00-00-00&#10;Account no: 12345678"
+                    value={form[f.key] ?? ''}
+                    onChange={(e) => set(f.key, e.target.value)}
+                  />
+                ) : (
+                  <input
+                    type={f.type}
+                    step={f.step}
+                    value={form[f.key] ?? ''}
+                    onChange={(e) => set(f.key, e.target.value)}
+                  />
+                )}
               </div>
             ))}
             <div style={{ flex: '1 1 220px' }}>

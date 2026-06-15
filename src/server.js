@@ -546,13 +546,35 @@ app.post('/api/orders', async (req, res) => {
     const order = await createPendingOrder(client, shopId, req.body, { paymentMethod: 'bank_transfer', source });
     await client.query('COMMIT');
     const settings = await getSettings(shopId);
+    const bankDetails = settings.bank_details || '';
     res.status(201).json({
       order_id: order.orderId,
       total: order.total,
       bank_instructions:
-        settings.bank_instructions ||
-        `Please transfer £${order.total.toFixed(2)} to the shop's bank account and quote order #${order.orderId}. Your order will be dispatched once payment is confirmed.`,
+        (bankDetails ? bankDetails + '\n\n' : '') +
+        `Please transfer £${order.total.toFixed(2)} and quote order #${order.orderId} as the reference. Your order will be dispatched once payment is confirmed.`,
     });
+
+    // Email the customer the bank details + reference (best-effort).
+    (async () => {
+      try {
+        const email = req.body?.customer?.email;
+        if (!email) return;
+        const { rows: shopRows } = await pool.query(`SELECT name FROM shops WHERE id = $1`, [shopId]);
+        const { rows: items } = await pool.query(
+          `SELECT name_snapshot, qty, line_total FROM order_items WHERE order_id = $1`, [order.orderId]
+        );
+        await emailService.sendBankTransferInstructions(
+          email,
+          shopRows[0]?.name || 'SiamShop',
+          { id: order.orderId, total: order.total, items, delivery_address: req.body?.delivery_address },
+          bankDetails,
+          orderStatusUrl(originFromReq(req), order.orderId, email)
+        );
+      } catch (e) {
+        console.warn('[email] bank transfer', e.message);
+      }
+    })();
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {});
     if (err.httpStatus) return res.status(err.httpStatus).json({ error: err.message });
@@ -1587,6 +1609,65 @@ app.get('/api/admin/dashboard', requireAuth, async (req, res) => {
   } catch (err) {
     console.error('[admin/dashboard]', err.message);
     res.status(500).json({ error: 'Failed to load dashboard' });
+  }
+});
+
+// Date-range sales report (paid orders). ?from=YYYY-MM-DD&to=YYYY-MM-DD;
+// defaults to the last 30 days when omitted.
+app.get('/api/admin/report', requireAuth, async (req, res) => {
+  try {
+    const shopId = await resolveShopId(req);
+    if (!shopId) return res.status(404).json({ error: 'Shop not found' });
+    const from = String(req.query.from || '').trim() || null;
+    const to = String(req.query.to || '').trim() || null;
+    // Shared date bounds: created_at in [from, to] inclusive (paid orders).
+    const WHERE = `o.shop_id = $1 AND o.payment_status = 'paid'
+       AND o.created_at >= COALESCE($2::date, (date_trunc('day', now()) - interval '29 days')::date)
+       AND o.created_at <  COALESCE($3::date, date_trunc('day', now())::date) + interval '1 day'`;
+    const args = [shopId, from, to];
+
+    const range = (await pool.query(
+      `SELECT COALESCE($2::date, (date_trunc('day', now()) - interval '29 days')::date)::text AS from_date,
+              COALESCE($3::date, date_trunc('day', now())::date)::text AS to_date`,
+      args
+    )).rows[0];
+
+    const totals = (await pool.query(
+      `SELECT COUNT(*)::int AS count, COALESCE(SUM(o.total),0)::numeric AS gross,
+              COALESCE(SUM(o.subtotal),0)::numeric AS subtotal, COALESCE(SUM(o.delivery_fee),0)::numeric AS delivery
+       FROM orders o WHERE ${WHERE}`, args
+    )).rows[0];
+
+    const byChannel = (await pool.query(
+      `SELECT o.channel, COUNT(*)::int AS count, COALESCE(SUM(o.total),0)::numeric AS gross
+       FROM orders o WHERE ${WHERE} GROUP BY o.channel ORDER BY gross DESC`, args
+    )).rows;
+
+    const byPayment = (await pool.query(
+      `SELECT COALESCE(o.payment_method,'—') AS payment_method, COUNT(*)::int AS count, COALESCE(SUM(o.total),0)::numeric AS gross
+       FROM orders o WHERE ${WHERE} GROUP BY o.payment_method ORDER BY gross DESC`, args
+    )).rows;
+
+    const topProducts = (await pool.query(
+      `SELECT oi.name_snapshot AS name, SUM(oi.qty)::int AS qty, COALESCE(SUM(oi.line_total),0)::numeric AS revenue
+       FROM order_items oi JOIN orders o ON o.id = oi.order_id
+       WHERE ${WHERE} GROUP BY oi.name_snapshot ORDER BY revenue DESC LIMIT 15`, args
+    )).rows;
+
+    res.json({
+      from: range.from_date,
+      to: range.to_date,
+      totals: {
+        count: Number(totals.count), gross: Number(totals.gross),
+        subtotal: Number(totals.subtotal), delivery: Number(totals.delivery),
+      },
+      by_channel: byChannel.map((r) => ({ channel: r.channel, count: r.count, gross: Number(r.gross) })),
+      by_payment: byPayment.map((r) => ({ payment_method: r.payment_method, count: r.count, gross: Number(r.gross) })),
+      top_products: topProducts.map((r) => ({ name: r.name, qty: r.qty, revenue: Number(r.revenue) })),
+    });
+  } catch (err) {
+    console.error('[admin/report]', err.message);
+    res.status(500).json({ error: 'Failed to build report' });
   }
 });
 
