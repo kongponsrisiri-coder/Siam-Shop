@@ -1,10 +1,16 @@
+/* SiamShop palette — SiamEPOS brand family (see restaurant-epos/BRAND_CI.md).
+   Thai Gold + Deep Navy + Action Red. --siam-red is kept as the name for the
+   primary action colour so existing rules adopt the brand without churn. */
 :root {
-  --siam-red: #c8102e;
-  --siam-gold: #f2a900;
+  --navy: #0D1B3E;        /* Deep Navy — navbar, headers, prices, totals */
+  --gold: #C9A84C;        /* Thai Gold — accents, highlights, hovers */
+  --siam-red: #e94560;    /* Action Red — primary buttons, active states */
+  --siam-gold: #C9A84C;   /* alias kept for existing rules */
   --ink: #1f2328;
   --muted: #6b7280;
   --line: #e5e7eb;
   --bg: #fafafa;
+  --serif: Georgia, 'Times New Roman', serif;
 }
 
 * { box-sizing: border-box; }
@@ -13,32 +19,43 @@ html { -webkit-text-size-adjust: 100%; }
 
 body {
   margin: 0;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, sans-serif;
   color: var(--ink);
   background: var(--bg);
   overflow-x: hidden; /* belt-and-braces against accidental horizontal scroll */
 }
+
+/* Brand/headings use the Georgia serif per the brand CI. */
+h1, h2, h3, h4 { font-family: var(--serif); color: var(--navy); }
 
 a { color: var(--siam-red); text-decoration: none; }
 a:hover { text-decoration: underline; }
 
 .container { max-width: 1080px; margin: 0 auto; padding: 0 16px; }
 
-/* Top bar */
+/* Top bar — Deep Navy with a thin Thai Gold underline (brand navbar). */
 .topbar {
   display: flex; align-items: center; justify-content: space-between; gap: 10px 16px;
   flex-wrap: wrap;
-  padding: 12px 16px; background: #fff; border-bottom: 1px solid var(--line);
+  padding: 12px 16px; background: var(--navy);
+  border-bottom: 2px solid rgba(201, 168, 76, 0.3);
   position: sticky; top: 0; z-index: 10;
 }
-.brand { font-weight: 800; font-size: 20px; color: var(--siam-red); white-space: nowrap; }
-.brand span { color: var(--siam-gold); }
+.brand { display: inline-flex; align-items: center; white-space: nowrap; }
+.brand:hover { text-decoration: none; }
+/* Staff surfaces (till/scanner) sit on white — logo + a muted surface label. */
+.surface-brand { gap: 10px; }
+.surface-tag {
+  font-family: var(--serif); font-weight: 700; font-size: 15px; color: var(--muted);
+  padding-left: 10px; border-left: 1px solid var(--line);
+}
 .navlinks { display: flex; align-items: center; flex-wrap: wrap; gap: 14px; }
-.navlinks a { font-weight: 600; color: var(--ink); }
+.navlinks a { font-weight: 600; color: rgba(255, 255, 255, 0.9); }
+.navlinks a:hover { color: var(--gold); text-decoration: none; }
 /* Subtle staff shortcuts, separated from the customer links */
-.staff-links { display: inline-flex; align-items: center; gap: 12px; padding-left: 12px; border-left: 1px solid var(--line); }
-.navlinks .staff-link { font-size: 13px; font-weight: 600; color: var(--muted); }
-.navlinks .staff-link:hover { color: var(--siam-red); }
+.staff-links { display: inline-flex; align-items: center; gap: 12px; padding-left: 12px; border-left: 1px solid rgba(255, 255, 255, 0.2); }
+.navlinks .staff-link { font-size: 13px; font-weight: 600; color: rgba(255, 255, 255, 0.55); }
+.navlinks .staff-link:hover { color: var(--gold); }
 .lang-toggle { margin-left: 0; }
 
 /* Buttons */
@@ -69,7 +86,7 @@ a:hover { text-decoration: underline; }
 .card .body { padding: 12px; display: flex; flex-direction: column; gap: 4px; flex: 1; }
 .card .name { font-weight: 700; }
 .card .name-th { color: var(--muted); font-size: 13px; }
-.card .price { font-weight: 800; color: var(--siam-red); margin-top: auto; }
+.card .price { font-weight: 800; color: var(--navy); margin-top: auto; }
 
 .muted { color: var(--muted); }
 .center { text-align: center; padding: 40px 0; }
@@ -146,7 +163,7 @@ th { color: var(--muted); font-weight: 600; }
 .thumb .ph {
   position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
   text-align: center; padding: 14px; font-weight: 700; font-size: 14px; line-height: 1.3;
-  color: #7a3b12; background: #f3efe7;
+  color: var(--navy); background: #f6f1e3;
 }
 
 .add-btn { margin-top: 8px; }

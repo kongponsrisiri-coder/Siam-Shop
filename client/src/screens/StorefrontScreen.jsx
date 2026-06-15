@@ -132,10 +132,10 @@ export default function StorefrontScreen() {
     <div className="container">
       <div
         className="panel hero"
-        style={{ background: 'linear-gradient(135deg,#c8102e,#f2a900)', color: '#fff', border: 'none' }}
+        style={{ background: 'linear-gradient(135deg,#0D1B3E 0%,#15275a 100%)', color: '#fff', border: 'none', borderBottom: '3px solid #C9A84C' }}
       >
-        <h1 style={{ margin: 0 }}>{shop?.name || 'SiamShop'}</h1>
-        <p style={{ margin: '6px 0 0', opacity: 0.95 }}>
+        <h1 style={{ margin: 0, color: '#fff' }}>{shop?.name || 'SiamShop'}</h1>
+        <p style={{ margin: '6px 0 0', opacity: 0.92, color: '#C9A84C' }}>
           {lang === 'th' ? 'ของชำไทย ส่งถึงบ้านคุณ' : 'Thai groceries, delivered to your door.'}
         </p>
       </div>

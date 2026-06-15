@@ -2,6 +2,7 @@ import React from 'react';
 import { Routes, Route, Link, Navigate } from 'react-router-dom';
 import { useCart } from './cart.jsx';
 import { useLang, useT } from './lang.jsx';
+import { Logo } from './components/Logo.jsx';
 
 import StorefrontScreen from './screens/StorefrontScreen.jsx';
 import ProductScreen from './screens/ProductScreen.jsx';
@@ -32,7 +33,7 @@ function TopBar() {
   const t = useT();
   return (
     <div className="topbar">
-      <Link to="/" className="brand">Siam<span>Shop</span></Link>
+      <Link to="/" className="brand" aria-label="SiamShop home"><Logo size={30} /></Link>
       <div className="navlinks">
         <Link to="/">{t('shop')}</Link>
         <Link to="/cart">{t('cart')}{count > 0 ? ` (${count})` : ''}</Link>

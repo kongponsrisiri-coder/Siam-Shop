@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api, auth } from '../api.js';
+import { Logo } from '../components/Logo.jsx';
 
 // In-store EPOS till (SIAMSHOP-103). Staff scan a barcode or search by name to
 // build a basket, take cash or card, and complete the sale — which decrements
@@ -191,7 +192,7 @@ export default function TillScreen() {
   return (
     <div className="till">
       <div className="till-head">
-        <Link to="/" className="brand">Siam<span>Shop</span> · Till</Link>
+        <Link to="/" className="brand surface-brand"><Logo size={26} light /><span className="surface-tag">Till</span></Link>
         <div className="spacer" />
         {summary && (
           <div className="till-takings">

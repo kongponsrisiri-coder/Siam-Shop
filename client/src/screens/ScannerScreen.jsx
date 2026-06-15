@@ -2,6 +2,14 @@ import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api, auth } from '../api.js';
 import BarcodeScanner from '../components/BarcodeScanner.jsx';
+import { Logo } from '../components/Logo.jsx';
+
+// Header lockup for the scanner: light-background logo + surface label.
+function ScannerBrand() {
+  return (
+    <span className="brand surface-brand"><Logo size={26} light /><span className="surface-tag">Scanner</span></span>
+  );
+}
 
 // Phone scanner PWA (SIAMSHOP-201/202/203). Four modes over one shared stock
 // core: Checkout (scan to sell), Receive (goods-in), Stocktake (count), and
@@ -38,7 +46,7 @@ function LoginGate({ onIn }) {
   }
   return (
     <div className="scanner">
-      <div className="scanner-head"><span className="brand">Siam<span>Shop</span> · Scanner</span></div>
+      <div className="scanner-head"><ScannerBrand /></div>
       <div className="scanner-body">
         <form className="panel" onSubmit={submit}>
           <h3 style={{ marginTop: 0 }}>Staff sign in</h3>
@@ -187,7 +195,7 @@ export default function ScannerScreen() {
   return (
     <div className="scanner">
       <div className="scanner-head">
-        <Link to="/" className="brand">Siam<span>Shop</span> · Scanner</Link>
+        <Link to="/" className="brand surface-brand"><Logo size={26} light /><span className="surface-tag">Scanner</span></Link>
         <Link to="/till" className="btn ghost" style={{ marginLeft: 'auto' }}>Till</Link>
       </div>
 
