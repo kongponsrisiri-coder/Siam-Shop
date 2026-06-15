@@ -85,12 +85,22 @@ function itemsTable(items) {
   return `<table style="width:100%;border-collapse:collapse;font-size:14px;">${rows}</table>`;
 }
 
-// Customer receipt. order = { id, total, subtotal, delivery_fee, items, delivery_address }
-function sendOrderConfirmation(customerEmail, shopName, order) {
+// A "Track your order" button, if a status URL is provided.
+function trackButton(statusUrl) {
+  if (!statusUrl) return '';
+  return `<p style="margin:18px 0;">
+      <a href="${esc(statusUrl)}" style="background:#c8102e;color:#fff;text-decoration:none;
+         padding:11px 18px;border-radius:8px;font-weight:600;display:inline-block;">Check your order status</a>
+    </p>`;
+}
+
+// Payment-confirmed receipt. Sent when payment is confirmed — instantly for card,
+// or when the shop marks a bank transfer as received. statusUrl is optional.
+function sendOrderConfirmation(customerEmail, shopName, order, statusUrl) {
   const html = `
     <div style="font-family:Arial,sans-serif;max-width:560px;margin:0 auto;color:#222;">
-      <h2>Thanks for your order!</h2>
-      <p>${esc(shopName)} has received your order <strong>#${esc(order.id)}</strong>.</p>
+      <h2>Payment received — your order is confirmed ✅</h2>
+      <p>${esc(shopName)} has confirmed your order <strong>#${esc(order.id)}</strong>. We'll let you know when it's dispatched.</p>
       ${itemsTable(order.items)}
       <hr style="border:none;border-top:1px solid #eee;margin:12px 0;">
       <p style="font-size:14px;">
@@ -99,9 +109,25 @@ function sendOrderConfirmation(customerEmail, shopName, order) {
         <strong>Total: ${money(order.total)}</strong>
       </p>
       ${order.delivery_address ? `<p style="font-size:14px;">Delivering to:<br>${esc(order.delivery_address)}</p>` : ''}
+      ${trackButton(statusUrl)}
       <p style="color:#888;font-size:12px;">SiamShop · Thai groceries, delivered.</p>
     </div>`;
   return sendBrevoEmail(customerEmail, `Order #${order.id} confirmed — ${shopName}`, html);
+}
+
+// Dispatch notification with tracking number. Sent when the shop marks the order
+// dispatched. order = { id, tracking_number, dispatch_date, delivery_address }
+function sendDispatchNotification(customerEmail, shopName, order, statusUrl) {
+  const html = `
+    <div style="font-family:Arial,sans-serif;max-width:560px;margin:0 auto;color:#222;">
+      <h2>Your order is on its way 📦</h2>
+      <p>${esc(shopName)} has dispatched your order <strong>#${esc(order.id)}</strong>.</p>
+      ${order.tracking_number ? `<p style="font-size:15px;">Tracking number: <strong>${esc(order.tracking_number)}</strong></p>` : ''}
+      ${order.delivery_address ? `<p style="font-size:14px;">Delivering to:<br>${esc(order.delivery_address)}</p>` : ''}
+      ${trackButton(statusUrl)}
+      <p style="color:#888;font-size:12px;">SiamShop · Thai groceries, delivered.</p>
+    </div>`;
+  return sendBrevoEmail(customerEmail, `Order #${order.id} dispatched — ${shopName}`, html);
 }
 
 // Shop owner notification of a new paid order.
@@ -126,4 +152,4 @@ function getEmailConfig() {
   };
 }
 
-module.exports = { sendBrevoEmail, sendOrderConfirmation, sendShopNotification, getEmailConfig };
+module.exports = { sendBrevoEmail, sendOrderConfirmation, sendDispatchNotification, sendShopNotification, getEmailConfig };

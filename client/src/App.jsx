@@ -10,6 +10,7 @@ import CheckoutScreen from './screens/CheckoutScreen.jsx';
 import AdminScreen from './screens/admin/AdminScreen.jsx';
 import TillScreen from './screens/TillScreen.jsx';
 import ScannerScreen from './screens/ScannerScreen.jsx';
+import OrderStatusScreen from './screens/OrderStatusScreen.jsx';
 
 function LangToggle() {
   const { lang, toggle } = useLang();
@@ -63,6 +64,7 @@ export default function App() {
               <Route path="/cart" element={<CartScreen />} />
               <Route path="/checkout" element={<CheckoutScreen />} />
               <Route path="/order/success" element={<CheckoutScreen success />} />
+              <Route path="/order/status" element={<OrderStatusScreen />} />
               <Route path="/admin/*" element={<AdminScreen />} />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>

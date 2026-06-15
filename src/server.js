@@ -198,7 +198,7 @@ async function createPendingOrder(client, shopId, body, { paymentMethod, source 
 // Fulfil an order once payment is confirmed: decrement stock + write movements
 // (reason online_sale), mark paid, and email the customer + shop. Idempotent —
 // safe to call from the Stripe webhook, the success page, and admin mark-paid.
-async function fulfilOrder(orderId) {
+async function fulfilOrder(orderId, baseUrl) {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
@@ -227,7 +227,7 @@ async function fulfilOrder(orderId) {
     await client.query('COMMIT');
 
     // Emails are best-effort (don't fail the order if Brevo is down/unset).
-    sendOrderEmails(order, items).catch((e) => console.warn('[email] order', orderId, e.message));
+    sendOrderEmails(order, items, baseUrl).catch((e) => console.warn('[email] order', orderId, e.message));
     return { ok: true };
   } catch (err) {
     await client.query('ROLLBACK');
@@ -307,10 +307,33 @@ async function handleMessengerOrder(shopId, senderId, text) {
   await messenger.sendMessage(senderId, reply);
 }
 
-// Send the customer receipt + shop-owner notification for a paid order.
-async function sendOrderEmails(order, items) {
+// Derive the public site origin from a request (Railway is behind a proxy),
+// falling back to FRONTEND_URL. Used to build customer-facing links in emails.
+function originFromReq(req) {
+  if (!req) return process.env.FRONTEND_URL || '';
+  const proto = String(req.headers['x-forwarded-proto'] || req.protocol || 'https').split(',')[0];
+  const host = req.headers['x-forwarded-host'] || req.headers.host;
+  return host ? `${proto}://${host}` : process.env.FRONTEND_URL || '';
+}
+// Public "check my order" link for emails.
+function orderStatusUrl(base, orderId) {
+  const b = (base || process.env.FRONTEND_URL || '').replace(/\/$/, '');
+  return b ? `${b}/order/status?order=${orderId}` : null;
+}
+
+// Look up a paid order's customer email + shop name (for lifecycle emails).
+async function orderEmailContext(order) {
   const { rows: shopRows } = await pool.query(`SELECT name FROM shops WHERE id = $1`, [order.shop_id]);
   const shopName = shopRows[0]?.name || 'SiamShop';
+  const { rows: custRows } = order.customer_id
+    ? await pool.query(`SELECT email FROM customers WHERE id = $1`, [order.customer_id])
+    : { rows: [] };
+  return { shopName, customerEmail: custRows[0]?.email };
+}
+
+// Send the customer receipt + shop-owner notification for a paid order.
+async function sendOrderEmails(order, items, baseUrl) {
+  const { shopName, customerEmail } = await orderEmailContext(order);
   const settings = await getSettings(order.shop_id);
   const payload = {
     id: order.id,
@@ -321,11 +344,8 @@ async function sendOrderEmails(order, items) {
     notes: order.notes,
     items,
   };
-  const { rows: custRows } = order.customer_id
-    ? await pool.query(`SELECT email FROM customers WHERE id = $1`, [order.customer_id])
-    : { rows: [] };
-  const customerEmail = custRows[0]?.email;
-  if (customerEmail) await emailService.sendOrderConfirmation(customerEmail, shopName, payload);
+  const statusUrl = orderStatusUrl(baseUrl, order.id);
+  if (customerEmail) await emailService.sendOrderConfirmation(customerEmail, shopName, payload, statusUrl);
   if (settings.shop_email) await emailService.sendShopNotification(settings.shop_email, shopName, payload);
 }
 
@@ -561,7 +581,7 @@ app.get('/api/orders/:id', async (req, res) => {
       try {
         const session = await stripeService.retrieveSession(order.stripe_payment_intent_id);
         if (session && session.payment_status === 'paid') {
-          await fulfilOrder(order.id);
+          await fulfilOrder(order.id, originFromReq(req));
           ({ rows } = await pool.query(
             `SELECT id, status, payment_status, payment_method, subtotal, delivery_fee, total, delivery_address, created_at
              FROM orders WHERE id = $1`,
@@ -1358,7 +1378,22 @@ app.post('/api/admin/orders/:id/dispatch', requireAuth, async (req, res) => {
       [req.params.id, shopId, req.body?.tracking_number || null]
     );
     if (!rows[0]) return res.status(404).json({ error: 'Order not found' });
-    res.json(rows[0]);
+    const order = rows[0];
+    res.json(order);
+
+    // Notify the customer their order is on its way (best-effort).
+    (async () => {
+      try {
+        const { shopName, customerEmail } = await orderEmailContext(order);
+        if (customerEmail) {
+          await emailService.sendDispatchNotification(
+            customerEmail, shopName, order, orderStatusUrl(originFromReq(req), order.id)
+          );
+        }
+      } catch (e) {
+        console.warn('[email] dispatch', order.id, e.message);
+      }
+    })();
   } catch (err) {
     console.error('[admin/orders dispatch]', err.message);
     res.status(500).json({ error: 'Failed to mark dispatched' });
@@ -1421,7 +1456,7 @@ app.post('/api/admin/orders/:id/mark-paid', requireAuth, async (req, res) => {
     if (!shopId) return res.status(404).json({ error: 'Shop not found' });
     const { rows } = await pool.query(`SELECT id FROM orders WHERE id = $1 AND shop_id = $2`, [req.params.id, shopId]);
     if (!rows[0]) return res.status(404).json({ error: 'Order not found' });
-    const r = await fulfilOrder(Number(req.params.id));
+    const r = await fulfilOrder(Number(req.params.id), originFromReq(req));
     if (!r.ok) return res.status(500).json({ error: r.reason || 'Failed to mark paid' });
     const { rows: updated } = await pool.query(`SELECT * FROM orders WHERE id = $1`, [req.params.id]);
     res.json(updated[0]);
@@ -1560,7 +1595,7 @@ app.post('/api/stripe/webhook', async (req, res) => {
     const session = event.data.object;
     const orderId = session.metadata?.order_id;
     if (orderId && session.payment_status === 'paid') {
-      const r = await fulfilOrder(Number(orderId));
+      const r = await fulfilOrder(Number(orderId), originFromReq(req));
       console.log('[stripe] fulfil order', orderId, r.ok ? (r.already ? '(already)' : 'OK') : 'FAILED');
     }
   }
