@@ -1627,9 +1627,9 @@ app.get('/api/admin/report', requireAuth, async (req, res) => {
     const args = [shopId, from, to];
 
     const range = (await pool.query(
-      `SELECT COALESCE($2::date, (date_trunc('day', now()) - interval '29 days')::date)::text AS from_date,
-              COALESCE($3::date, date_trunc('day', now())::date)::text AS to_date`,
-      args
+      `SELECT COALESCE($1::date, (date_trunc('day', now()) - interval '29 days')::date)::text AS from_date,
+              COALESCE($2::date, date_trunc('day', now())::date)::text AS to_date`,
+      [from, to]
     )).rows[0];
 
     const totals = (await pool.query(
