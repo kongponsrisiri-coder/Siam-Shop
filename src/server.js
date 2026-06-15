@@ -330,6 +330,7 @@ async function handleMessengerOrder(shopId, senderId, text) {
     buildCartLink(lines);
 
   await messenger.sendMessage(senderId, reply);
+  console.log('[messenger] reply sent to', senderId, `(${lines.length} item(s), £${subtotal.toFixed(2)})`);
 }
 
 // Derive the public site origin from a request (Railway is behind a proxy),
@@ -1938,7 +1939,13 @@ app.get('/api/messenger/webhook', (req, res) => {
 // process each message asynchronously: parse -> price -> reply with checkout link.
 app.post('/api/messenger/webhook', async (req, res) => {
   const raw = req.body; // Buffer, from express.raw above
+  console.log('[messenger] POST received', raw && raw.length, 'bytes', {
+    hasSecret: Boolean(process.env.MESSENGER_APP_SECRET),
+    hasPageToken: Boolean(process.env.MESSENGER_PAGE_ACCESS_TOKEN),
+    hasAnthropic: Boolean(process.env.ANTHROPIC_API_KEY),
+  });
   if (!messenger.verifySignature(raw, req.headers['x-hub-signature-256'])) {
+    console.warn('[messenger] signature check FAILED — rejecting (check MESSENGER_APP_SECRET)');
     return res.sendStatus(403);
   }
   res.sendStatus(200);
@@ -1946,15 +1953,24 @@ app.post('/api/messenger/webhook', async (req, res) => {
   let payload;
   try {
     payload = JSON.parse(raw.toString('utf8'));
-  } catch {
+  } catch (e) {
+    console.warn('[messenger] could not parse body', e.message);
     return;
   }
-  if (payload.object !== 'page') return;
+  if (payload.object !== 'page') {
+    console.log('[messenger] ignoring object type:', payload.object);
+    return;
+  }
   const messages = messenger.extractMessages(payload);
+  console.log('[messenger] extracted', messages.length, 'message(s)');
   if (messages.length === 0) return;
   const shopId = await getShopIdBySlug(process.env.DEFAULT_SHOP_SLUG || 'demo');
-  if (!shopId) return;
+  if (!shopId) {
+    console.warn('[messenger] no shop found for slug', process.env.DEFAULT_SHOP_SLUG || 'demo');
+    return;
+  }
   for (const m of messages) {
+    console.log('[messenger] handling message from', m.senderId, ':', m.text);
     handleMessengerOrder(shopId, m.senderId, m.text).catch((e) =>
       console.error('[messenger] handle', e.message)
     );
