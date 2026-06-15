@@ -35,6 +35,7 @@ function TopBar() {
       <div className="navlinks">
         <Link to="/">{t('shop')}</Link>
         <Link to="/cart">{t('cart')}{count > 0 ? ` (${count})` : ''}</Link>
+        <Link to="/order/status">{t('track')}</Link>
         <LangToggle />
         {/* Staff shortcuts (login-gated). Shown for the owner's convenience. */}
         <span className="staff-links">

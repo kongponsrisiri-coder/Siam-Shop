@@ -14,30 +14,59 @@ function statusOf(o) {
   return { label: 'Paid — preparing your order', cls: 'ok' };
 }
 
-// Public order tracking page (linked from confirmation/dispatch emails).
+// Public order tracking page — used both by the email links (?order=N) and as a
+// "Track your order" box where a customer types their order number.
 export default function OrderStatusScreen() {
   const t = useT();
-  const [params] = useSearchParams();
+  const [params, setParams] = useSearchParams();
   const orderId = params.get('order') || params.get('order_id');
+  const [input, setInput] = useState(orderId || '');
   const [order, setOrder] = useState(null);
   const [error, setError] = useState('');
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    if (!orderId) { setError('No order number provided.'); setLoading(false); return; }
+    setInput(orderId || '');
+    if (!orderId) { setOrder(null); setError(''); return; }
+    setLoading(true);
+    setError('');
     api.getOrder(orderId)
       .then(setOrder)
-      .catch((e) => setError(e.message))
+      .catch((e) => { setError(e.message); setOrder(null); })
       .finally(() => setLoading(false));
   }, [orderId]);
 
-  if (loading) return <div className="container center muted">{t('loading')}</div>;
-  if (error) return <div className="container center err">{error} — <Link to="/">back to shop</Link></div>;
+  function submit(e) {
+    e.preventDefault();
+    const v = input.trim();
+    if (v) setParams({ order: v });
+  }
 
-  const s = statusOf(order);
+  const trackBox = (
+    <form className="panel" onSubmit={submit} style={{ maxWidth: 420 }}>
+      <h3 style={{ marginTop: 0 }}>Track your order</h3>
+      <label>Order number</label>
+      <div className="row" style={{ gap: 8 }}>
+        <input inputMode="numeric" placeholder="e.g. 3" value={input} onChange={(e) => setInput(e.target.value)} />
+        <button className="btn" type="submit">Track</button>
+      </div>
+    </form>
+  );
 
   return (
     <div className="container" style={{ maxWidth: 560 }}>
+      {trackBox}
+      {loading && <div className="center muted">{t('loading')}</div>}
+      {error && <div className="err" style={{ marginTop: 8 }}>{error}</div>}
+      {order && <OrderResult order={order} />}
+    </div>
+  );
+}
+
+function OrderResult({ order }) {
+  const s = statusOf(order);
+  return (
+    <div style={{ marginTop: 16 }}>
       <h1 style={{ marginBottom: 4 }}>Order #{order.id}</h1>
       <div style={{ margin: '8px 0 16px' }}>
         <span className={`tag ${s.cls}`} style={{ fontSize: 14, padding: '6px 12px' }}>{s.label}</span>

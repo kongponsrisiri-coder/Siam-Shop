@@ -61,6 +61,7 @@ const STRINGS = {
   en: {
     shop: 'Shop',
     cart: 'Cart',
+    track: 'Track order',
     search: 'Search products…',
     all: 'All',
     addToCart: 'Add to cart',
@@ -85,6 +86,7 @@ const STRINGS = {
   th: {
     shop: 'ร้านค้า',
     cart: 'ตะกร้า',
+    track: 'ติดตามคำสั่งซื้อ',
     search: 'ค้นหาสินค้า…',
     all: 'ทั้งหมด',
     addToCart: 'ใส่ตะกร้า',
