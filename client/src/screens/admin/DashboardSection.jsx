@@ -159,7 +159,9 @@ export default function DashboardSection({ onGoToOrders }) {
                   <td>{o.id}</td>
                   <td>{o.customer_name || '—'}</td>
                   <td>{CHANNEL_LABEL[o.channel] || o.channel}</td>
-                  <td><span className={`tag ${o.payment_status === 'paid' ? '' : 'off'}`}>{o.status}</span></td>
+                  <td><span className={`tag ${o.status === 'cancelled' || o.payment_status !== 'paid' ? 'off' : 'ok'}`}>
+                    {o.status === 'cancelled' ? 'Cancelled' : o.payment_status !== 'paid' ? 'Awaiting payment' : o.status === 'dispatched' ? 'Dispatched' : 'Paid'}
+                  </span></td>
                   <td style={{ textAlign: 'right' }}>{money(o.total)}</td>
                   <td className="muted">{new Date(o.created_at).toLocaleString()}</td>
                 </tr>

@@ -1,12 +1,14 @@
 import React, { useEffect, useState } from 'react';
 import { api } from '../../api.js';
 
-const STATUS_TAG = {
-  paid: 'tag',
-  pending: 'tag off',
-  fulfilled: 'tag',
-  dispatched: 'tag',
-};
+// Clear, combined payment + fulfilment state for the list.
+function orderState(o) {
+  if (o.status === 'cancelled') return { label: 'Cancelled', cls: 'off' };
+  if (o.payment_status === 'refunded') return { label: 'Refunded', cls: 'off' };
+  if (o.payment_status !== 'paid') return { label: 'Awaiting payment', cls: 'off' };
+  if (o.status === 'dispatched') return { label: 'Dispatched', cls: 'ok' };
+  return { label: 'Paid · to dispatch', cls: 'ok' };
+}
 
 function OrderDetail({ id, onBack, onChanged }) {
   const [order, setOrder] = useState(null);
@@ -256,7 +258,7 @@ export default function OrdersSection() {
                       {o.customer_email && <div className="muted" style={{ fontSize: 12 }}>{o.customer_email}</div>}
                     </td>
                     <td>{o.source || o.channel || '—'}</td>
-                    <td><span className={STATUS_TAG[o.status] || 'tag'}>{o.status}</span></td>
+                    <td><span className={`tag ${orderState(o).cls}`}>{orderState(o).label}</span></td>
                     <td>{o.payment_status}{o.payment_method ? ` (${o.payment_method})` : ''}</td>
                     <td>£{Number(o.total).toFixed(2)}</td>
                     <td className="muted">{new Date(o.created_at).toLocaleString()}</td>
