@@ -197,6 +197,26 @@ export default function OrdersSection() {
     load();
   }, []);
 
+  // Inline quick actions (no need to open the detail).
+  async function act(fn) {
+    setError('');
+    try { await fn(); await load(); } catch (e) { setError(e.message); }
+  }
+  function quickDispatch(e, o) {
+    e.stopPropagation();
+    const t = window.prompt(`Dispatch order #${o.id} — tracking number (optional):`, o.tracking_number || '');
+    if (t === null) return;
+    act(() => api.adminDispatchOrder(o.id, t.trim()));
+  }
+  function quickPaid(e, o) {
+    e.stopPropagation();
+    if (window.confirm(`Mark order #${o.id} as paid? (stock will be deducted)`)) act(() => api.adminMarkPaid(o.id));
+  }
+  function quickCancel(e, o) {
+    e.stopPropagation();
+    if (window.confirm(`Cancel order #${o.id}? If it was paid, stock is restored.`)) act(() => api.adminCancelOrder(o.id));
+  }
+
   async function exportCsv() {
     try {
       const blob = await api.exportOrdersCsv();
@@ -247,12 +267,18 @@ export default function OrdersSection() {
                   <th>Payment</th>
                   <th>Total</th>
                   <th>Placed</th>
+                  <th>Actions</th>
                 </tr>
               </thead>
               <tbody>
-                {orders.map((o) => (
+                {orders.map((o) => {
+                  const paid = o.payment_status === 'paid';
+                  const canDispatch = paid && o.status !== 'dispatched' && o.status !== 'cancelled';
+                  const canMarkPaid = o.payment_method === 'bank_transfer' && !paid && o.status !== 'cancelled';
+                  const canCancel = o.status !== 'cancelled' && o.status !== 'dispatched';
+                  return (
                   <tr key={o.id} className="order-row" onClick={() => setSelected(o.id)}>
-                    <td>{o.id}</td>
+                    <td><strong>#{o.id}</strong></td>
                     <td>
                       {o.customer_name || '—'}
                       {o.customer_email && <div className="muted" style={{ fontSize: 12 }}>{o.customer_email}</div>}
@@ -262,8 +288,17 @@ export default function OrdersSection() {
                     <td>{o.payment_status}{o.payment_method ? ` (${o.payment_method})` : ''}</td>
                     <td>£{Number(o.total).toFixed(2)}</td>
                     <td className="muted">{new Date(o.created_at).toLocaleString()}</td>
+                    <td onClick={(e) => e.stopPropagation()}>
+                      <div className="order-actions">
+                        {canMarkPaid && <button className="btn mini" onClick={(e) => quickPaid(e, o)}>Mark paid</button>}
+                        {canDispatch && <button className="btn mini" onClick={(e) => quickDispatch(e, o)}>Dispatch</button>}
+                        {canCancel && <button className="btn mini cancel-btn" onClick={(e) => quickCancel(e, o)}>Cancel</button>}
+                        <button className="btn mini secondary" onClick={(e) => { e.stopPropagation(); setSelected(o.id); }}>Open</button>
+                      </div>
+                    </td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           )}

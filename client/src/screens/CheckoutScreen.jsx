@@ -28,7 +28,9 @@ function SuccessView() {
   return (
     <div className="container center">
       <h1>🎉 Thank you!</h1>
-      <p className="muted">Your order has been placed. A confirmation email is on its way.</p>
+      {orderId && <div className="order-number">Order #{orderId}</div>}
+      <p className="muted">Your order has been placed — please keep your order number for tracking.
+        A confirmation email is on its way.</p>
 
       {error && <p className="err">{error}</p>}
 

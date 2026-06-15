@@ -250,6 +250,9 @@ th { color: var(--muted); font-weight: 600; }
 }
 .cancel-btn { background: #fff; color: var(--siam-red); border: 1px solid var(--siam-red); }
 .cancel-btn:hover { background: #fee2e2; }
+.btn.mini { padding: 5px 10px; font-size: 12px; min-height: 0; }
+.order-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.order-number { font-size: 22px; font-weight: 800; color: var(--siam-red); margin: 6px 0; }
 
 .till-catalogue { display: flex; flex-direction: column; padding: 16px; min-height: 0; }
 .till-cats { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
