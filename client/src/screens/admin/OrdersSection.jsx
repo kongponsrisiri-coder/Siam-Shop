@@ -14,6 +14,8 @@ function OrderDetail({ id, onBack, onChanged }) {
   const [order, setOrder] = useState(null);
   const [error, setError] = useState('');
   const [tracking, setTracking] = useState('');
+  const [carrier, setCarrier] = useState('');
+  const [carrierList, setCarrierList] = useState([]);
   const [busy, setBusy] = useState(false);
 
   async function load() {
@@ -22,6 +24,7 @@ function OrderDetail({ id, onBack, onChanged }) {
       const o = await api.adminGetOrder(id);
       setOrder(o);
       setTracking(o.tracking_number || '');
+      setCarrier(o.carrier || '');
     } catch (e) {
       setError(e.message);
     }
@@ -29,6 +32,7 @@ function OrderDetail({ id, onBack, onChanged }) {
 
   useEffect(() => {
     load();
+    api.adminCarriers().then(setCarrierList).catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
@@ -40,7 +44,7 @@ function OrderDetail({ id, onBack, onChanged }) {
     setBusy(true);
     setError('');
     try {
-      await api.adminDispatchOrder(id, tracking.trim());
+      await api.adminDispatchOrder(id, tracking.trim(), carrier || null);
       await load();
       onChanged && onChanged();
     } catch (e) {
@@ -155,7 +159,14 @@ function OrderDetail({ id, onBack, onChanged }) {
         <h3 style={{ marginTop: 0 }}>Actions</h3>
         {error && <p className="err">{error}</p>}
         <div className="row" style={{ gap: 12, flexWrap: 'wrap', alignItems: 'flex-end' }}>
-          <div style={{ flex: '1 1 240px' }}>
+          <div style={{ flex: '1 1 160px' }}>
+            <label>Carrier</label>
+            <select value={carrier} onChange={(e) => setCarrier(e.target.value)}>
+              <option value="">— choose —</option>
+              {carrierList.map((c) => <option key={c.key} value={c.key}>{c.name}</option>)}
+            </select>
+          </div>
+          <div style={{ flex: '1 1 200px' }}>
             <label>Tracking number</label>
             <input value={tracking} onChange={(e) => setTracking(e.target.value)} placeholder="e.g. RM123456789GB" />
           </div>

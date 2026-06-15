@@ -18,6 +18,7 @@ const aiService = require('./services/aiService');
 const delivery = require('./services/delivery');
 const messenger = require('./services/messengerService');
 const emailService = require('./services/emailService');
+const carriers = require('./services/carriers');
 
 const app = express();
 
@@ -595,7 +596,7 @@ app.get('/api/orders/:id', async (req, res) => {
     const provided = String(req.query.email || '').trim().toLowerCase();
     let { rows } = await pool.query(
       `SELECT o.id, o.status, o.payment_status, o.payment_method, o.subtotal, o.delivery_fee, o.total,
-              o.delivery_address, o.stripe_payment_intent_id, o.tracking_number, o.created_at,
+              o.delivery_address, o.stripe_payment_intent_id, o.tracking_number, o.carrier, o.created_at,
               c.email AS customer_email
        FROM orders o LEFT JOIN customers c ON c.id = o.customer_id
        WHERE o.id = $1 AND o.shop_id = $2`,
@@ -616,7 +617,7 @@ app.get('/api/orders/:id', async (req, res) => {
           await fulfilOrder(order.id, originFromReq(req));
           ({ rows } = await pool.query(
             `SELECT id, status, payment_status, payment_method, subtotal, delivery_fee, total,
-                    delivery_address, tracking_number, created_at
+                    delivery_address, tracking_number, carrier, created_at
              FROM orders WHERE id = $1`,
             [order.id]
           ));
@@ -632,7 +633,9 @@ app.get('/api/orders/:id', async (req, res) => {
       `SELECT name_snapshot, qty, line_total FROM order_items WHERE order_id = $1`,
       [order.id]
     );
-    res.json({ ...order, items });
+    const carrier_tracking_url = carriers.trackingUrl(order.carrier, order.tracking_number);
+    const carrier_name = order.tracking_number ? carriers.nameOf(order.carrier) : null;
+    res.json({ ...order, items, carrier_tracking_url, carrier_name });
   } catch (err) {
     console.error('[orders GET]', err.message);
     res.status(500).json({ error: 'Failed to load order' });
@@ -1407,21 +1410,24 @@ app.post('/api/admin/orders/:id/dispatch', requireAuth, async (req, res) => {
     if (!shopId) return res.status(404).json({ error: 'Shop not found' });
     const { rows } = await pool.query(
       `UPDATE orders SET status = 'dispatched', dispatch_date = COALESCE(dispatch_date, CURRENT_DATE),
-              tracking_number = $3, fulfilled_at = NOW()
+              tracking_number = $3, carrier = $4, fulfilled_at = NOW()
        WHERE id = $1 AND shop_id = $2 RETURNING *`,
-      [req.params.id, shopId, req.body?.tracking_number || null]
+      [req.params.id, shopId, req.body?.tracking_number || null, req.body?.carrier || null]
     );
     if (!rows[0]) return res.status(404).json({ error: 'Order not found' });
     const order = rows[0];
     res.json(order);
 
-    // Notify the customer their order is on its way (best-effort).
+    // Notify the customer their order is on its way, with a carrier tracking link.
     (async () => {
       try {
         const { shopName, customerEmail } = await orderEmailContext(order);
         if (customerEmail) {
+          const carrierUrl = carriers.trackingUrl(order.carrier, order.tracking_number);
           await emailService.sendDispatchNotification(
-            customerEmail, shopName, order, orderStatusUrl(originFromReq(req), order.id, customerEmail)
+            customerEmail, shopName, order,
+            orderStatusUrl(originFromReq(req), order.id, customerEmail),
+            carrierUrl, order.carrier ? carriers.nameOf(order.carrier) : null
           );
         }
       } catch (e) {
@@ -1432,6 +1438,11 @@ app.post('/api/admin/orders/:id/dispatch', requireAuth, async (req, res) => {
     console.error('[admin/orders dispatch]', err.message);
     res.status(500).json({ error: 'Failed to mark dispatched' });
   }
+});
+
+// Courier list for the dispatch dropdown.
+app.get('/api/admin/carriers', requireAuth, (req, res) => {
+  res.json(carriers.list());
 });
 
 // Cancel an order (e.g. customer never paid). If it was already paid, restore

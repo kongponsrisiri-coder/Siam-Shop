@@ -99,10 +99,11 @@ export const api = {
   // Admin orders
   adminListOrders: () => request('/api/admin/orders', { authed: true }),
   adminGetOrder: (id) => request(`/api/admin/orders/${id}`, { authed: true }),
-  adminDispatchOrder: (id, tracking_number) =>
+  adminCarriers: () => request('/api/admin/carriers', { authed: true }),
+  adminDispatchOrder: (id, tracking_number, carrier) =>
     request(`/api/admin/orders/${id}/dispatch`, {
       method: 'POST',
-      body: { tracking_number },
+      body: { tracking_number, carrier },
       authed: true,
     }),
   adminMarkPaid: (id) =>

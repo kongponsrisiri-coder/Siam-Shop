@@ -94,6 +94,13 @@ function OrderResult({ order }) {
         {order.tracking_number && (
           <p style={{ marginTop: 12 }}>Tracking number: <strong>{order.tracking_number}</strong></p>
         )}
+        {order.carrier_tracking_url && (
+          <p style={{ marginTop: 8 }}>
+            <a className="btn" href={order.carrier_tracking_url} target="_blank" rel="noreferrer">
+              Track with {order.carrier_name || 'courier'} →
+            </a>
+          </p>
+        )}
         {order.delivery_address && (
           <p className="muted" style={{ fontSize: 14 }}>Delivering to:<br />{order.delivery_address}</p>
         )}

@@ -192,6 +192,7 @@ async function initDB() {
     await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS source VARCHAR(20) NOT NULL DEFAULT 'website'`);
     await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS dispatch_date DATE`);
     await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS tracking_number VARCHAR(120)`);
+    await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS carrier VARCHAR(40)`);
 
     // Back-in-stock notify-me requests (SIAMSHOP-010).
     await pool.query(`

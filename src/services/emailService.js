@@ -139,12 +139,20 @@ function sendBankTransferInstructions(customerEmail, shopName, order, bankDetail
 
 // Dispatch notification with tracking number. Sent when the shop marks the order
 // dispatched. order = { id, tracking_number, dispatch_date, delivery_address }
-function sendDispatchNotification(customerEmail, shopName, order, statusUrl) {
+function sendDispatchNotification(customerEmail, shopName, order, statusUrl, carrierUrl, carrierName) {
+  const carrierBtn = carrierUrl
+    ? `<p style="margin:14px 0;">
+         <a href="${esc(carrierUrl)}" style="background:#1f2328;color:#fff;text-decoration:none;
+            padding:11px 18px;border-radius:8px;font-weight:600;display:inline-block;">
+            Track with ${esc(carrierName || 'the courier')} →</a>
+       </p>`
+    : '';
   const html = `
     <div style="font-family:Arial,sans-serif;max-width:560px;margin:0 auto;color:#222;">
       <h2>Your order is on its way 📦</h2>
-      <p>${esc(shopName)} has dispatched your order <strong>#${esc(order.id)}</strong>.</p>
+      <p>${esc(shopName)} has dispatched your order <strong>#${esc(order.id)}</strong>${carrierName ? ` via ${esc(carrierName)}` : ''}.</p>
       ${order.tracking_number ? `<p style="font-size:15px;">Tracking number: <strong>${esc(order.tracking_number)}</strong></p>` : ''}
+      ${carrierBtn}
       ${order.delivery_address ? `<p style="font-size:14px;">Delivering to:<br>${esc(order.delivery_address)}</p>` : ''}
       ${trackButton(statusUrl)}
       <p style="color:#888;font-size:12px;">SiamShop · Thai groceries, delivered.</p>
