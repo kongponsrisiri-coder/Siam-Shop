@@ -26,9 +26,11 @@ function isConfigured() {
 // lineItems: [{ name, amount_pence, qty }]  (amount_pence is per-unit, integer)
 // Returns the Session (use .url to redirect the customer, .id + .payment_intent
 // later for verification).
-async function createCheckoutSession({ orderId, shopSlug, lineItems, deliveryFeePence = 0, customerEmail }) {
+async function createCheckoutSession({ orderId, shopSlug, lineItems, deliveryFeePence = 0, customerEmail, origin }) {
   const stripe = getStripe();
-  const frontend = (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
+  // Prefer the actual request origin (where the shopper is) so the post-payment
+  // redirect always returns to the right place; fall back to FRONTEND_URL.
+  const frontend = (origin || process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
 
   const line_items = lineItems.map((li) => ({
     quantity: li.qty,

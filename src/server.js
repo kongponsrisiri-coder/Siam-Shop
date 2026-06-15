@@ -481,9 +481,16 @@ app.post('/api/checkout/session', async (req, res) => {
     if (!stripeService.isConfigured()) {
       return res.json({ url: null, order_id: order.orderId, message: 'Card payments not configured yet — order saved as pending.' });
     }
+    // Build the redirect base from where the request actually came from
+    // (Railway is behind a proxy, so honour x-forwarded-*).
+    const proto = String(req.headers['x-forwarded-proto'] || req.protocol || 'https').split(',')[0];
+    const host = req.headers['x-forwarded-host'] || req.headers.host;
+    const origin = host ? `${proto}://${host}` : undefined;
+
     const session = await stripeService.createCheckoutSession({
       orderId: order.orderId,
       shopSlug: slug,
+      origin,
       lineItems: (await pool.query(
         `SELECT name_snapshot AS name, price_snapshot, qty FROM order_items WHERE order_id = $1`,
         [order.orderId]
