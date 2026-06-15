@@ -315,10 +315,13 @@ function originFromReq(req) {
   const host = req.headers['x-forwarded-host'] || req.headers.host;
   return host ? `${proto}://${host}` : process.env.FRONTEND_URL || '';
 }
-// Public "check my order" link for emails.
-function orderStatusUrl(base, orderId) {
+// Public "check my order" link for emails (carries the email so the link works
+// without the customer re-typing it; tracking requires order# + matching email).
+function orderStatusUrl(base, orderId, email) {
   const b = (base || process.env.FRONTEND_URL || '').replace(/\/$/, '');
-  return b ? `${b}/order/status?order=${orderId}` : null;
+  if (!b) return null;
+  const e = email ? `&email=${encodeURIComponent(email)}` : '';
+  return `${b}/order/status?order=${orderId}${e}`;
 }
 
 // Look up a paid order's customer email + shop name (for lifecycle emails).
@@ -344,7 +347,7 @@ async function sendOrderEmails(order, items, baseUrl) {
     notes: order.notes,
     items,
   };
-  const statusUrl = orderStatusUrl(baseUrl, order.id);
+  const statusUrl = orderStatusUrl(baseUrl, order.id, customerEmail);
   if (customerEmail) await emailService.sendOrderConfirmation(customerEmail, shopName, payload, statusUrl);
   if (settings.shop_email) await emailService.sendShopNotification(settings.shop_email, shopName, payload);
 }
@@ -560,21 +563,28 @@ app.post('/api/orders', async (req, res) => {
   }
 });
 
-// Public order summary (for the success/confirmation page). For a Stripe order
-// that has been paid but not yet fulfilled (e.g. webhook not wired in test mode),
-// this lazily fulfils it once Stripe confirms payment — idempotent.
+// Public order summary — requires the order number AND the matching customer
+// email (so customers can only see their own order, not guess numbers). Also
+// lazily fulfils a paid-but-unconfirmed Stripe order (idempotent).
 app.get('/api/orders/:id', async (req, res) => {
   try {
     const shopId = await resolveShopId(req);
     if (!shopId) return res.status(404).json({ error: 'Shop not found' });
+    const provided = String(req.query.email || '').trim().toLowerCase();
     let { rows } = await pool.query(
-      `SELECT id, status, payment_status, payment_method, subtotal, delivery_fee, total,
-              delivery_address, stripe_payment_intent_id, created_at
-       FROM orders WHERE id = $1 AND shop_id = $2`,
+      `SELECT o.id, o.status, o.payment_status, o.payment_method, o.subtotal, o.delivery_fee, o.total,
+              o.delivery_address, o.stripe_payment_intent_id, o.tracking_number, o.created_at,
+              c.email AS customer_email
+       FROM orders o LEFT JOIN customers c ON c.id = o.customer_id
+       WHERE o.id = $1 AND o.shop_id = $2`,
       [req.params.id, shopId]
     );
     let order = rows[0];
-    if (!order) return res.status(404).json({ error: 'Order not found' });
+    // Same 404 whether the order is missing or the email doesn't match — don't
+    // reveal which orders exist.
+    if (!order || !order.customer_email || provided !== order.customer_email.toLowerCase()) {
+      return res.status(404).json({ error: 'Order not found — check the order number and email.' });
+    }
 
     if (order.payment_status === 'pending' && order.payment_method === 'stripe' &&
         order.stripe_payment_intent_id && stripeService.isConfigured()) {
@@ -583,17 +593,19 @@ app.get('/api/orders/:id', async (req, res) => {
         if (session && session.payment_status === 'paid') {
           await fulfilOrder(order.id, originFromReq(req));
           ({ rows } = await pool.query(
-            `SELECT id, status, payment_status, payment_method, subtotal, delivery_fee, total, delivery_address, created_at
+            `SELECT id, status, payment_status, payment_method, subtotal, delivery_fee, total,
+                    delivery_address, tracking_number, created_at
              FROM orders WHERE id = $1`,
             [order.id]
           ));
-          order = rows[0];
+          order = { ...rows[0], customer_email: order.customer_email };
         }
       } catch (e) {
         console.warn('[orders GET] stripe confirm', e.message);
       }
     }
 
+    delete order.customer_email; // never expose the email in the response
     const { rows: items } = await pool.query(
       `SELECT name_snapshot, qty, line_total FROM order_items WHERE order_id = $1`,
       [order.id]
@@ -1387,7 +1399,7 @@ app.post('/api/admin/orders/:id/dispatch', requireAuth, async (req, res) => {
         const { shopName, customerEmail } = await orderEmailContext(order);
         if (customerEmail) {
           await emailService.sendDispatchNotification(
-            customerEmail, shopName, order, orderStatusUrl(originFromReq(req), order.id)
+            customerEmail, shopName, order, orderStatusUrl(originFromReq(req), order.id, customerEmail)
           );
         }
       } catch (e) {

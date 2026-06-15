@@ -56,7 +56,7 @@ async function createCheckoutSession({ orderId, shopSlug, lineItems, deliveryFee
     mode: 'payment',
     line_items,
     customer_email: customerEmail || undefined,
-    success_url: `${frontend}/order/success?order=${orderId}&session_id={CHECKOUT_SESSION_ID}`,
+    success_url: `${frontend}/order/success?order=${orderId}&email=${encodeURIComponent(customerEmail || '')}&session_id={CHECKOUT_SESSION_ID}`,
     cancel_url: `${frontend}/cart`,
     metadata: {
       product: 'siamshop',

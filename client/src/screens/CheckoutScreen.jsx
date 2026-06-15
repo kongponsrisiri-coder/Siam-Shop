@@ -10,6 +10,7 @@ function SuccessView() {
   const { clear } = useCart();
   const [params] = useSearchParams();
   const orderId = params.get('order') || params.get('order_id');
+  const emailParam = params.get('email') || '';
   const sessionId = params.get('session_id');
   const [order, setOrder] = useState(null);
   const [error, setError] = useState('');
@@ -18,7 +19,7 @@ function SuccessView() {
     clear();
     if (orderId) {
       api
-        .getOrder(orderId)
+        .getOrder(orderId, emailParam)
         .then(setOrder)
         .catch((e) => setError(e.message));
     }

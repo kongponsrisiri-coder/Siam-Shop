@@ -59,7 +59,7 @@ export const api = {
   checkoutSession: (body) =>
     request('/api/checkout/session', { method: 'POST', body }),
   createOrder: (body) => request('/api/orders', { method: 'POST', body }),
-  getOrder: (id) => request(`/api/orders/${id}`),
+  getOrder: (id, email) => request(`/api/orders/${id}${email ? `?email=${encodeURIComponent(email)}` : ''}`),
 
   // Admin auth
   login: (password) => request('/api/admin/login', { method: 'POST', body: { password } }),

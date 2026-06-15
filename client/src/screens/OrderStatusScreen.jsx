@@ -20,36 +20,40 @@ export default function OrderStatusScreen() {
   const t = useT();
   const [params, setParams] = useSearchParams();
   const orderId = params.get('order') || params.get('order_id');
+  const emailParam = params.get('email') || '';
   const [input, setInput] = useState(orderId || '');
+  const [email, setEmail] = useState(emailParam);
   const [order, setOrder] = useState(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     setInput(orderId || '');
-    if (!orderId) { setOrder(null); setError(''); return; }
+    setEmail(emailParam);
+    if (!orderId || !emailParam) { setOrder(null); setError(''); return; }
     setLoading(true);
     setError('');
-    api.getOrder(orderId)
+    api.getOrder(orderId, emailParam)
       .then(setOrder)
       .catch((e) => { setError(e.message); setOrder(null); })
       .finally(() => setLoading(false));
-  }, [orderId]);
+  }, [orderId, emailParam]);
 
   function submit(e) {
     e.preventDefault();
     const v = input.trim();
-    if (v) setParams({ order: v });
+    const em = email.trim();
+    if (v && em) setParams({ order: v, email: em });
   }
 
   const trackBox = (
-    <form className="panel" onSubmit={submit} style={{ maxWidth: 420 }}>
+    <form className="panel" onSubmit={submit} style={{ maxWidth: 440 }}>
       <h3 style={{ marginTop: 0 }}>Track your order</h3>
       <label>Order number</label>
-      <div className="row" style={{ gap: 8 }}>
-        <input inputMode="numeric" placeholder="e.g. 3" value={input} onChange={(e) => setInput(e.target.value)} />
-        <button className="btn" type="submit">Track</button>
-      </div>
+      <input inputMode="numeric" placeholder="e.g. 3" value={input} onChange={(e) => setInput(e.target.value)} />
+      <label>Email used at checkout</label>
+      <input type="email" placeholder="you@example.com" value={email} onChange={(e) => setEmail(e.target.value)} />
+      <button className="btn" type="submit" style={{ marginTop: 12 }}>Track</button>
     </form>
   );
 
