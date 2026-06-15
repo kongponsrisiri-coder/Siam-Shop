@@ -193,6 +193,8 @@ async function initDB() {
     await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS dispatch_date DATE`);
     await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS tracking_number VARCHAR(120)`);
     await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS carrier VARCHAR(40)`);
+    // SIAMSHOP-006: customer accounts (password optional — set when they register).
+    await pool.query(`ALTER TABLE customers ADD COLUMN IF NOT EXISTS password_hash TEXT`);
 
     // Back-in-stock notify-me requests (SIAMSHOP-010).
     await pool.query(`

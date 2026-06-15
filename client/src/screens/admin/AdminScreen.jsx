@@ -5,6 +5,7 @@ import ReportsSection from './ReportsSection.jsx';
 import ProductsSection from './ProductsSection.jsx';
 import CategoriesSection from './CategoriesSection.jsx';
 import OrdersSection from './OrdersSection.jsx';
+import CustomersSection from './CustomersSection.jsx';
 import SettingsSection from './SettingsSection.jsx';
 
 function LoginForm({ onLoggedIn }) {
@@ -55,6 +56,7 @@ const TABS = [
   { key: 'products', label: 'Products', Comp: ProductsSection },
   { key: 'categories', label: 'Categories', Comp: CategoriesSection },
   { key: 'orders', label: 'Orders', Comp: OrdersSection },
+  { key: 'customers', label: 'Customers', Comp: CustomersSection },
   { key: 'settings', label: 'Settings', Comp: SettingsSection },
 ];
 

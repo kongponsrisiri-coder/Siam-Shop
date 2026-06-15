@@ -85,6 +85,30 @@ function requireAuth(req, res, next) {
   next();
 }
 
+// Customer accounts (SIAMSHOP-006). Passwords hashed with scrypt (salt:hash).
+function hashPassword(pw) {
+  const salt = crypto.randomBytes(16).toString('hex');
+  return `${salt}:${crypto.scryptSync(String(pw), salt, 64).toString('hex')}`;
+}
+function verifyPassword(pw, stored) {
+  if (!stored || !stored.includes(':')) return false;
+  const [salt, hash] = stored.split(':');
+  const calc = crypto.scryptSync(String(pw), salt, 64).toString('hex');
+  const a = Buffer.from(calc);
+  const b = Buffer.from(hash);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
+}
+// Route gate for logged-in customers (token role=customer, carries cid).
+function requireCustomer(req, res, next) {
+  const m = /^Bearer\s+(.+)$/i.exec(req.get('authorization') || '');
+  const payload = m ? verifyToken(m[1]) : null;
+  if (!payload || payload.role !== 'customer' || !payload.cid) {
+    return res.status(401).json({ error: 'Please sign in to your account.' });
+  }
+  req.customer = payload;
+  next();
+}
+
 // Small helper to throw an error that carries an HTTP status through a try/catch
 // (used inside transactions so a failed line rolls the whole sale back).
 function httpError(status, message) {
@@ -639,6 +663,118 @@ app.get('/api/orders/:id', async (req, res) => {
   } catch (err) {
     console.error('[orders GET]', err.message);
     res.status(500).json({ error: 'Failed to load order' });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Customer accounts (SIAMSHOP-006)
+// ---------------------------------------------------------------------------
+app.post('/api/account/register', async (req, res) => {
+  try {
+    const shopId = await resolveShopId(req);
+    if (!shopId) return res.status(404).json({ error: 'Shop not found' });
+    const email = String(req.body?.email || '').trim().toLowerCase();
+    const password = String(req.body?.password || '');
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return res.status(400).json({ error: 'Enter a valid email' });
+    if (password.length < 6) return res.status(400).json({ error: 'Password must be at least 6 characters' });
+
+    const { rows: ex } = await pool.query(
+      `SELECT id, password_hash FROM customers WHERE shop_id = $1 AND email = $2`, [shopId, email]
+    );
+    let cid;
+    if (ex[0]) {
+      if (ex[0].password_hash) return res.status(409).json({ error: 'An account already exists for this email — please log in.' });
+      // Existing customer (from a past order) claiming their account.
+      ({ rows: [{ id: cid }] } = await pool.query(
+        `UPDATE customers SET password_hash = $3, name = COALESCE($4, name), phone = COALESCE($5, phone),
+                marketing_consent = $6 WHERE id = $1 AND shop_id = $2 RETURNING id`,
+        [ex[0].id, shopId, hashPassword(password), req.body?.name || null, req.body?.phone || null, Boolean(req.body?.marketing_consent)]
+      ));
+    } else {
+      ({ rows: [{ id: cid }] } = await pool.query(
+        `INSERT INTO customers (shop_id, email, name, phone, marketing_consent, password_hash)
+         VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
+        [shopId, email, req.body?.name || null, req.body?.phone || null, Boolean(req.body?.marketing_consent), hashPassword(password)]
+      ));
+    }
+    const token = signToken({ role: 'customer', cid, exp: Date.now() + TOKEN_TTL_MS });
+    const { rows: prof } = await pool.query(
+      `SELECT id, name, email, phone, marketing_consent FROM customers WHERE id = $1`, [cid]
+    );
+    res.status(201).json({ token, customer: prof[0] });
+  } catch (err) {
+    if (err.code === '23505') return res.status(409).json({ error: 'An account already exists for this email — please log in.' });
+    console.error('[account/register]', err.message);
+    res.status(500).json({ error: 'Could not create account' });
+  }
+});
+
+app.post('/api/account/login', async (req, res) => {
+  try {
+    const shopId = await resolveShopId(req);
+    if (!shopId) return res.status(404).json({ error: 'Shop not found' });
+    const email = String(req.body?.email || '').trim().toLowerCase();
+    const password = String(req.body?.password || '');
+    const { rows } = await pool.query(
+      `SELECT id, password_hash FROM customers WHERE shop_id = $1 AND email = $2`, [shopId, email]
+    );
+    const c = rows[0];
+    if (!c || !verifyPassword(password, c.password_hash)) {
+      return res.status(401).json({ error: 'Incorrect email or password.' });
+    }
+    const token = signToken({ role: 'customer', cid: c.id, exp: Date.now() + TOKEN_TTL_MS });
+    const { rows: prof } = await pool.query(
+      `SELECT id, name, email, phone, marketing_consent FROM customers WHERE id = $1`, [c.id]
+    );
+    res.json({ token, customer: prof[0] });
+  } catch (err) {
+    console.error('[account/login]', err.message);
+    res.status(500).json({ error: 'Login failed' });
+  }
+});
+
+app.get('/api/account', requireCustomer, async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT c.id, c.name, c.email, c.phone, c.marketing_consent, c.created_at,
+              (SELECT COUNT(*) FROM orders o WHERE o.customer_id = c.id)::int AS order_count,
+              (SELECT COALESCE(SUM(o.total),0) FROM orders o WHERE o.customer_id = c.id AND o.payment_status='paid')::numeric AS total_spent
+       FROM customers c WHERE c.id = $1`, [req.customer.cid]
+    );
+    if (!rows[0]) return res.status(404).json({ error: 'Account not found' });
+    res.json({ ...rows[0], total_spent: Number(rows[0].total_spent) });
+  } catch (err) {
+    console.error('[account GET]', err.message);
+    res.status(500).json({ error: 'Failed to load account' });
+  }
+});
+
+app.put('/api/account', requireCustomer, async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `UPDATE customers SET name = COALESCE($2, name), phone = $3,
+              marketing_consent = COALESCE($4, marketing_consent)
+       WHERE id = $1 RETURNING id, name, email, phone, marketing_consent`,
+      [req.customer.cid, req.body?.name != null ? String(req.body.name) : null,
+       req.body?.phone ?? null, req.body?.marketing_consent != null ? Boolean(req.body.marketing_consent) : null]
+    );
+    res.json(rows[0]);
+  } catch (err) {
+    console.error('[account PUT]', err.message);
+    res.status(500).json({ error: 'Failed to update account' });
+  }
+});
+
+app.get('/api/account/orders', requireCustomer, async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT id, status, payment_status, payment_method, total, created_at, tracking_number, carrier
+       FROM orders WHERE customer_id = $1 ORDER BY created_at DESC LIMIT 100`, [req.customer.cid]
+    );
+    res.json(rows);
+  } catch (err) {
+    console.error('[account/orders]', err.message);
+    res.status(500).json({ error: 'Failed to load orders' });
   }
 });
 
@@ -1679,6 +1815,58 @@ app.get('/api/admin/report', requireAuth, async (req, res) => {
   } catch (err) {
     console.error('[admin/report]', err.message);
     res.status(500).json({ error: 'Failed to build report' });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Admin CRM — customers + spending (SIAMSHOP-006)
+// ---------------------------------------------------------------------------
+app.get('/api/admin/customers', requireAuth, async (req, res) => {
+  try {
+    const shopId = await resolveShopId(req);
+    if (!shopId) return res.status(404).json({ error: 'Shop not found' });
+    const { rows } = await pool.query(
+      `SELECT c.id, c.name, c.email, c.phone, c.marketing_consent, c.created_at,
+              COUNT(o.id)::int AS order_count,
+              COALESCE(SUM(o.total) FILTER (WHERE o.payment_status = 'paid'), 0)::numeric AS total_spent,
+              MAX(o.created_at) AS last_order_at
+       FROM customers c
+       LEFT JOIN orders o ON o.customer_id = c.id
+       WHERE c.shop_id = $1
+       GROUP BY c.id
+       ORDER BY total_spent DESC, c.created_at DESC
+       LIMIT 500`,
+      [shopId]
+    );
+    res.json(rows.map((r) => ({ ...r, total_spent: Number(r.total_spent) })));
+  } catch (err) {
+    console.error('[admin/customers]', err.message);
+    res.status(500).json({ error: 'Failed to load customers' });
+  }
+});
+
+app.get('/api/admin/customers/:id', requireAuth, async (req, res) => {
+  try {
+    const shopId = await resolveShopId(req);
+    if (!shopId) return res.status(404).json({ error: 'Shop not found' });
+    const { rows } = await pool.query(
+      `SELECT c.id, c.name, c.email, c.phone, c.marketing_consent, c.created_at,
+              (c.password_hash IS NOT NULL) AS has_account,
+              (SELECT COUNT(*) FROM orders o WHERE o.customer_id = c.id)::int AS order_count,
+              (SELECT COALESCE(SUM(o.total),0) FROM orders o WHERE o.customer_id = c.id AND o.payment_status='paid')::numeric AS total_spent
+       FROM customers c WHERE c.id = $1 AND c.shop_id = $2`,
+      [req.params.id, shopId]
+    );
+    if (!rows[0]) return res.status(404).json({ error: 'Customer not found' });
+    const { rows: orders } = await pool.query(
+      `SELECT id, channel, source, status, payment_status, payment_method, total, created_at
+       FROM orders WHERE customer_id = $1 ORDER BY created_at DESC LIMIT 200`,
+      [req.params.id]
+    );
+    res.json({ ...rows[0], total_spent: Number(rows[0].total_spent), orders });
+  } catch (err) {
+    console.error('[admin/customers/:id]', err.message);
+    res.status(500).json({ error: 'Failed to load customer' });
   }
 });
 

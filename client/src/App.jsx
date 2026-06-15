@@ -11,6 +11,7 @@ import AdminScreen from './screens/admin/AdminScreen.jsx';
 import TillScreen from './screens/TillScreen.jsx';
 import ScannerScreen from './screens/ScannerScreen.jsx';
 import OrderStatusScreen from './screens/OrderStatusScreen.jsx';
+import AccountScreen from './screens/AccountScreen.jsx';
 
 function LangToggle() {
   const { lang, toggle } = useLang();
@@ -36,6 +37,7 @@ function TopBar() {
         <Link to="/">{t('shop')}</Link>
         <Link to="/cart">{t('cart')}{count > 0 ? ` (${count})` : ''}</Link>
         <Link to="/order/status">{t('track')}</Link>
+        <Link to="/account">{t('account')}</Link>
         <LangToggle />
         {/* Staff shortcuts (login-gated). Shown for the owner's convenience. */}
         <span className="staff-links">
@@ -66,6 +68,7 @@ export default function App() {
               <Route path="/checkout" element={<CheckoutScreen />} />
               <Route path="/order/success" element={<CheckoutScreen success />} />
               <Route path="/order/status" element={<OrderStatusScreen />} />
+              <Route path="/account" element={<AccountScreen />} />
               <Route path="/admin/*" element={<AdminScreen />} />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>

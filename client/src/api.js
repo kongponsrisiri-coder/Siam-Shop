@@ -12,9 +12,18 @@ export const auth = {
   clear: () => localStorage.removeItem(TOKEN_KEY),
 };
 
-async function request(path, { method = 'GET', body, authed = false } = {}) {
+// Separate token for logged-in customers (kept apart from the admin token).
+const CUSTOMER_TOKEN_KEY = 'siamshop_customer_token';
+export const customerAuth = {
+  get: () => localStorage.getItem(CUSTOMER_TOKEN_KEY) || '',
+  set: (t) => localStorage.setItem(CUSTOMER_TOKEN_KEY, t),
+  clear: () => localStorage.removeItem(CUSTOMER_TOKEN_KEY),
+};
+
+async function request(path, { method = 'GET', body, authed = false, customerAuthed = false } = {}) {
   const headers = { 'Content-Type': 'application/json' };
   if (authed) headers.Authorization = `Bearer ${auth.get()}`;
+  if (customerAuthed) headers.Authorization = `Bearer ${customerAuth.get()}`;
 
   const res = await fetch(`${API_BASE}${path}`, {
     method,
@@ -95,6 +104,18 @@ export const api = {
     const s = qs.toString();
     return request(`/api/admin/report${s ? `?${s}` : ''}`, { authed: true });
   },
+
+  // Customer accounts (SIAMSHOP-006)
+  customerAuth, // { get, set, clear } for the customer token
+  accountRegister: (body) => request('/api/account/register', { method: 'POST', body }),
+  accountLogin: (body) => request('/api/account/login', { method: 'POST', body }),
+  accountMe: () => request('/api/account', { customerAuthed: true }),
+  accountUpdate: (body) => request('/api/account', { method: 'PUT', body, customerAuthed: true }),
+  accountOrders: () => request('/api/account/orders', { customerAuthed: true }),
+
+  // Admin CRM
+  adminListCustomers: () => request('/api/admin/customers', { authed: true }),
+  adminGetCustomer: (id) => request(`/api/admin/customers/${id}`, { authed: true }),
 
   // Admin orders
   adminListOrders: () => request('/api/admin/orders', { authed: true }),

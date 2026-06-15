@@ -191,10 +191,15 @@ th { color: var(--muted); font-weight: 600; }
   padding: 12px; white-space: pre-wrap; text-align: left; font-size: 13px;
 }
 
+/* Customer account */
+.account-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
+.account-kpis { grid-template-columns: repeat(2, 1fr); }
+
 @media (max-width: 760px) {
   .product-detail { grid-template-columns: 1fr; }
   .checkout-grid { grid-template-columns: 1fr; }
   .checkout-grid .panel { margin: 16px 0; }
+  .account-grid { grid-template-columns: 1fr; }
 }
 
 /* Admin dashboard */
