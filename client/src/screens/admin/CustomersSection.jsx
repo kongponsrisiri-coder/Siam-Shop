@@ -115,12 +115,13 @@ export default function CustomersSection() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [selected, setSelected] = useState(null);
+  const [consentOnly, setConsentOnly] = useState(false);
 
   async function load() {
     setLoading(true);
     setError('');
     try {
-      setCustomers(await api.adminListCustomers());
+      setCustomers(await api.adminListCustomers(consentOnly));
     } catch (e) {
       setError(e.message);
     } finally {
@@ -130,7 +131,24 @@ export default function CustomersSection() {
 
   useEffect(() => {
     load();
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [consentOnly]);
+
+  async function exportCsv() {
+    try {
+      const blob = await api.exportCustomersCsv(consentOnly);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `siamshop-${consentOnly ? 'marketing-' : ''}customers-${new Date().toISOString().slice(0, 10)}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      setError(e.message);
+    }
+  }
 
   if (selected != null) {
     return <CustomerDetail id={selected} onBack={() => setSelected(null)} />;
@@ -138,13 +156,30 @@ export default function CustomersSection() {
 
   return (
     <div>
-      <h2 style={{ marginTop: 16 }}>Customers</h2>
+      <div className="row" style={{ marginTop: 16 }}>
+        <h2 style={{ margin: 0 }}>Customers</h2>
+        <div className="spacer" />
+        <label className="row" style={{ gap: 6, margin: 0, fontWeight: 600, fontSize: 13 }}>
+          <input
+            type="checkbox"
+            style={{ width: 'auto' }}
+            checked={consentOnly}
+            onChange={(e) => setConsentOnly(e.target.checked)}
+          />
+          Marketing opt-ins only
+        </label>
+        {customers.length > 0 && <button className="btn secondary" onClick={exportCsv}>⬇ Export CSV</button>}
+      </div>
+
       {loading && <div className="center muted">Loading…</div>}
       {error && <div className="center err">{error}</div>}
       {!loading && !error && (
         <div className="panel">
+          <p className="muted" style={{ marginTop: 0, fontSize: 13 }}>
+            {customers.length} customer{customers.length === 1 ? '' : 's'}{consentOnly ? ' opted in to marketing' : ''}
+          </p>
           {customers.length === 0 ? (
-            <p className="muted center">No customers yet.</p>
+            <p className="muted center">No customers{consentOnly ? ' have opted in yet.' : ' yet.'}</p>
           ) : (
             <table>
               <thead>
@@ -152,6 +187,7 @@ export default function CustomersSection() {
                   <th>Name</th>
                   <th>Email</th>
                   <th>Phone</th>
+                  <th>Marketing</th>
                   <th>Orders</th>
                   <th style={{ textAlign: 'right' }}>Total spent</th>
                   <th>Last order</th>
@@ -163,6 +199,7 @@ export default function CustomersSection() {
                     <td><strong>{c.name || '—'}</strong></td>
                     <td>{c.email || '—'}</td>
                     <td>{c.phone || '—'}</td>
+                    <td><span className={`tag ${c.marketing_consent ? 'ok' : 'off'}`}>{c.marketing_consent ? 'Opted in' : 'No'}</span></td>
                     <td>{c.order_count ?? 0}</td>
                     <td style={{ textAlign: 'right' }}>{money(c.total_spent)}</td>
                     <td className="muted">

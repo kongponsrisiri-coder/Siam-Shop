@@ -114,8 +114,15 @@ export const api = {
   accountOrders: () => request('/api/account/orders', { customerAuthed: true }),
 
   // Admin CRM
-  adminListCustomers: () => request('/api/admin/customers', { authed: true }),
+  adminListCustomers: (consentOnly) => request(`/api/admin/customers${consentOnly ? '?consent=1' : ''}`, { authed: true }),
   adminGetCustomer: (id) => request(`/api/admin/customers/${id}`, { authed: true }),
+  exportCustomersCsv: async (consentOnly) => {
+    const res = await fetch(`${API_BASE}/api/admin/customers.csv${consentOnly ? '?consent=1' : ''}`, {
+      headers: { Authorization: `Bearer ${auth.get()}` },
+    });
+    if (!res.ok) throw new Error('Export failed');
+    return res.blob();
+  },
 
   // Admin orders
   adminListOrders: () => request('/api/admin/orders', { authed: true }),

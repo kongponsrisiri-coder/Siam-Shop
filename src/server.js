@@ -1821,27 +1821,57 @@ app.get('/api/admin/report', requireAuth, async (req, res) => {
 // ---------------------------------------------------------------------------
 // Admin CRM — customers + spending (SIAMSHOP-006)
 // ---------------------------------------------------------------------------
+// Shared customer query — optionally filtered to marketing opt-ins.
+async function queryCustomers(shopId, consentOnly) {
+  const { rows } = await pool.query(
+    `SELECT c.id, c.name, c.email, c.phone, c.marketing_consent, c.created_at,
+            COUNT(o.id)::int AS order_count,
+            COALESCE(SUM(o.total) FILTER (WHERE o.payment_status = 'paid'), 0)::numeric AS total_spent,
+            MAX(o.created_at) AS last_order_at
+     FROM customers c
+     LEFT JOIN orders o ON o.customer_id = c.id
+     WHERE c.shop_id = $1 ${consentOnly ? 'AND c.marketing_consent = TRUE' : ''}
+     GROUP BY c.id
+     ORDER BY total_spent DESC, c.created_at DESC
+     LIMIT 2000`,
+    [shopId]
+  );
+  return rows.map((r) => ({ ...r, total_spent: Number(r.total_spent) }));
+}
+
+const consentParam = (req) => ['1', 'true', 'yes'].includes(String(req.query.consent || '').toLowerCase());
+
 app.get('/api/admin/customers', requireAuth, async (req, res) => {
   try {
     const shopId = await resolveShopId(req);
     if (!shopId) return res.status(404).json({ error: 'Shop not found' });
-    const { rows } = await pool.query(
-      `SELECT c.id, c.name, c.email, c.phone, c.marketing_consent, c.created_at,
-              COUNT(o.id)::int AS order_count,
-              COALESCE(SUM(o.total) FILTER (WHERE o.payment_status = 'paid'), 0)::numeric AS total_spent,
-              MAX(o.created_at) AS last_order_at
-       FROM customers c
-       LEFT JOIN orders o ON o.customer_id = c.id
-       WHERE c.shop_id = $1
-       GROUP BY c.id
-       ORDER BY total_spent DESC, c.created_at DESC
-       LIMIT 500`,
-      [shopId]
-    );
-    res.json(rows.map((r) => ({ ...r, total_spent: Number(r.total_spent) })));
+    res.json(await queryCustomers(shopId, consentParam(req)));
   } catch (err) {
     console.error('[admin/customers]', err.message);
     res.status(500).json({ error: 'Failed to load customers' });
+  }
+});
+
+// Export customers as CSV (respects ?consent=1 for marketing opt-ins only).
+app.get('/api/admin/customers.csv', requireAuth, async (req, res) => {
+  try {
+    const shopId = await resolveShopId(req);
+    if (!shopId) return res.status(404).json({ error: 'Shop not found' });
+    const rows = await queryCustomers(shopId, consentParam(req));
+    const cols = ['id', 'name', 'email', 'phone', 'marketing_consent', 'order_count', 'total_spent', 'last_order_at', 'created_at'];
+    const esc = (v) => {
+      if (v == null) return '';
+      const s = v instanceof Date ? v.toISOString() : String(v);
+      return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+    };
+    const csv = [cols.join(',')].concat(rows.map((r) => cols.map((c) => esc(r[c])).join(','))).join('\r\n');
+    const tag = consentParam(req) ? 'marketing-' : '';
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="siamshop-${tag}customers-${new Date().toISOString().slice(0, 10)}.csv"`);
+    res.send(csv);
+  } catch (err) {
+    console.error('[admin/customers.csv]', err.message);
+    res.status(500).json({ error: 'Failed to export customers' });
   }
 });
 
