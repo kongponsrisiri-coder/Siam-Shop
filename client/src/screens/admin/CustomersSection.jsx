@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { api } from '../../api.js';
+import { maskName, maskEmail } from '../../demo.js';
 
 function money(n) {
   return `£${Number(n || 0).toFixed(2)}`;
@@ -69,10 +70,10 @@ function CustomerDetail({ id, onBack, onDeleted }) {
       {error && <div className="center err">{error}</div>}
 
       <div className="panel">
-        <h2 style={{ marginTop: 0 }}>{cust.name || '—'}</h2>
+        <h2 style={{ marginTop: 0 }}>{maskName(cust.name || '—', cust.id)}</h2>
         <table>
           <tbody>
-            <tr><th>Email</th><td>{cust.email || '—'}</td></tr>
+            <tr><th>Email</th><td>{cust.email ? maskEmail(cust.email, cust.id) : '—'}</td></tr>
             <tr><th>Phone</th><td>{cust.phone || '—'}</td></tr>
             <tr>
               <th>Marketing</th>
@@ -232,8 +233,8 @@ export default function CustomersSection() {
               <tbody>
                 {customers.map((c) => (
                   <tr key={c.id} className="order-row" onClick={() => setSelected(c.id)}>
-                    <td><strong>{c.name || '—'}</strong></td>
-                    <td>{c.email || '—'}</td>
+                    <td><strong>{maskName(c.name || '—', c.id)}</strong></td>
+                    <td>{c.email ? maskEmail(c.email, c.id) : '—'}</td>
                     <td>{c.phone || '—'}</td>
                     <td><span className={`tag ${c.marketing_consent ? 'ok' : 'off'}`}>{c.marketing_consent ? 'Opted in' : 'No'}</span></td>
                     <td>{c.order_count ?? 0}</td>

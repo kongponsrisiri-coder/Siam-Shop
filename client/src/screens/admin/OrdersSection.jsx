@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { api } from '../../api.js';
+import { maskName, maskEmail } from '../../demo.js';
 
 // Clear, combined payment + fulfilment state for the list.
 function orderState(o) {
@@ -107,8 +108,8 @@ function OrderDetail({ id, onBack, onChanged }) {
         <div className="slip-cols">
           <div>
             <h4>Deliver to</h4>
-            <div>{cust.name || order.customer_name || '—'}</div>
-            {(cust.email || order.customer_email) && <div className="muted">{cust.email || order.customer_email}</div>}
+            <div>{maskName(cust.name || order.customer_name || '—', order.id)}</div>
+            {(cust.email || order.customer_email) && <div className="muted">{maskEmail(cust.email || order.customer_email, order.id)}</div>}
             {cust.phone && <div className="muted">{cust.phone}</div>}
             <pre className="addr">{order.delivery_address || '—'}</pre>
           </div>
@@ -291,8 +292,8 @@ export default function OrdersSection() {
                   <tr key={o.id} className="order-row" onClick={() => setSelected(o.id)}>
                     <td><strong>#{o.id}</strong></td>
                     <td>
-                      {o.customer_name || '—'}
-                      {o.customer_email && <div className="muted" style={{ fontSize: 12 }}>{o.customer_email}</div>}
+                      {maskName(o.customer_name || '—', o.id)}
+                      {o.customer_email && <div className="muted" style={{ fontSize: 12 }}>{maskEmail(o.customer_email, o.id)}</div>}
                     </td>
                     <td>{o.source || o.channel || '—'}</td>
                     <td><span className={`tag ${orderState(o).cls}`}>{orderState(o).label}</span></td>

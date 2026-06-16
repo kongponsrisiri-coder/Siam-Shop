@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { api, auth } from '../../api.js';
+import { isDemo, setDemo } from '../../demo.js';
 import DashboardSection from './DashboardSection.jsx';
 import ReportsSection from './ReportsSection.jsx';
 import ProductsSection from './ProductsSection.jsx';
@@ -64,6 +65,13 @@ export default function AdminScreen() {
   const [authed, setAuthed] = useState(false);
   const [checking, setChecking] = useState(true);
   const [tab, setTab] = useState('dashboard');
+  const [demo, setDemoState] = useState(isDemo());
+
+  function toggleDemo() {
+    const next = !demo;
+    setDemo(next);
+    setDemoState(next);
+  }
 
   useEffect(() => {
     if (!auth.get()) {
@@ -88,6 +96,13 @@ export default function AdminScreen() {
         <h1 style={{ margin: 0 }}>Admin</h1>
         <div className="spacer" />
         <button
+          className={`btn ${demo ? '' : 'secondary'}`}
+          onClick={toggleDemo}
+          title="Hide real customer names/emails for screenshots (display only — no data changed)"
+        >
+          {demo ? '🟢 Demo mode ON' : 'Demo mode'}
+        </button>
+        <button
           className="btn secondary"
           onClick={() => {
             auth.clear();
@@ -97,6 +112,11 @@ export default function AdminScreen() {
           Sign out
         </button>
       </div>
+      {demo && (
+        <p className="muted" style={{ margin: '8px 0 0', fontSize: 13 }}>
+          Demo mode is on — customer names &amp; emails are replaced with fake data for screenshots. Real data is unchanged. Turn off when done.
+        </p>
+      )}
 
       <div className="row" style={{ marginTop: 12, gap: 8 }}>
         {TABS.map((t) => (
