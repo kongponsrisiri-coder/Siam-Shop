@@ -59,7 +59,7 @@ export default function DashboardSection({ onGoToOrders }) {
         <Kpi label="Today" value={money(s.day.gross)} sub={`${s.day.count} orders`} accent="var(--siam-red)" />
         <Kpi label="This week" value={money(s.week.gross)} sub={`${s.week.count} orders`} accent="var(--siam-gold)" />
         <Kpi label="This month" value={money(s.month.gross)} sub={`${s.month.count} orders`} accent="#16a34a" />
-        <Kpi label="All time" value={money(s.all.gross)} sub={`${s.all.count} orders`} accent="#3730a3" />
+        <Kpi label="All time" value={money(s.all.gross)} sub={`${s.all.count} orders`} accent="var(--navy)" />
       </div>
 
       {/* Operational counts */}

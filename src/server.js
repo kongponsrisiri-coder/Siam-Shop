@@ -8,6 +8,8 @@
 
 const express = require('express');
 const cors = require('cors');
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
 const crypto = require('crypto');
 const path = require('path');
 const fs = require('fs');
@@ -21,6 +23,35 @@ const emailService = require('./services/emailService');
 const carriers = require('./services/carriers');
 
 const app = express();
+
+// Railway runs behind a single reverse proxy. Trust it so req.ip is the real
+// client IP (rate limiting keys on it) and Stripe/Messenger origin detection works.
+app.set('trust proxy', 1);
+
+// --- Security headers -------------------------------------------------------
+// helmet sets sensible secure headers. CSP is disabled: this service also serves
+// the React SPA from the same origin, and a default CSP would block it; the app
+// is a same-origin SPA + Bearer-token API, so the other helmet defaults are the
+// valuable part (HSTS, no-sniff, frameguard, referrer policy).
+app.use(helmet({ contentSecurityPolicy: false, crossOriginResourcePolicy: false }));
+
+// --- Rate limiting ----------------------------------------------------------
+// Brute-force guard on auth endpoints (admin/customer login, registration) and a
+// broad limiter on the order-tracking lookup. Standard headers; trust-proxy set.
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10, // 10 attempts per 15 min per IP on a single auth route
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many attempts — please wait a few minutes and try again.' },
+});
+const lookupLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 60, // order tracking: generous, but blocks scripted enumeration
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests — please slow down.' },
+});
 
 // --- CORS -------------------------------------------------------------------
 // Admin auth uses Bearer tokens (not cookies), so a permissive origin is safe.
@@ -413,7 +444,7 @@ app.get('/api/health', async (req, res) => {
 // ---------------------------------------------------------------------------
 // Scaffold login: a single shared owner password → admin token. Per-staff
 // accounts come later. Uses a constant-time compare to avoid timing leaks.
-app.post('/api/admin/login', (req, res) => {
+app.post('/api/admin/login', authLimiter, (req, res) => {
   const password = String(req.body?.password || '');
   const expected = process.env.ADMIN_PASSWORD || '';
   if (!expected) {
@@ -624,7 +655,7 @@ app.post('/api/orders', async (req, res) => {
 // Public order summary — requires the order number AND the matching customer
 // email (so customers can only see their own order, not guess numbers). Also
 // lazily fulfils a paid-but-unconfirmed Stripe order (idempotent).
-app.get('/api/orders/:id', async (req, res) => {
+app.get('/api/orders/:id', lookupLimiter, async (req, res) => {
   try {
     const shopId = await resolveShopId(req);
     if (!shopId) return res.status(404).json({ error: 'Shop not found' });
@@ -680,7 +711,7 @@ app.get('/api/orders/:id', async (req, res) => {
 // ---------------------------------------------------------------------------
 // Customer accounts (SIAMSHOP-006)
 // ---------------------------------------------------------------------------
-app.post('/api/account/register', async (req, res) => {
+app.post('/api/account/register', authLimiter, async (req, res) => {
   try {
     const shopId = await resolveShopId(req);
     if (!shopId) return res.status(404).json({ error: 'Shop not found' });
@@ -720,7 +751,7 @@ app.post('/api/account/register', async (req, res) => {
   }
 });
 
-app.post('/api/account/login', async (req, res) => {
+app.post('/api/account/login', authLimiter, async (req, res) => {
   try {
     const shopId = await resolveShopId(req);
     if (!shopId) return res.status(404).json({ error: 'Shop not found' });
