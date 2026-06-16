@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { api } from '../../api.js';
-import { maskName, maskEmail } from '../../demo.js';
+import { maskName, maskEmail, maskAddress } from '../../demo.js';
 
 // Clear, combined payment + fulfilment state for the list.
 function orderState(o) {
@@ -111,7 +111,7 @@ function OrderDetail({ id, onBack, onChanged }) {
             <div>{maskName(cust.name || order.customer_name || '—', order.id)}</div>
             {(cust.email || order.customer_email) && <div className="muted">{maskEmail(cust.email || order.customer_email, order.id)}</div>}
             {cust.phone && <div className="muted">{cust.phone}</div>}
-            <pre className="addr">{order.delivery_address || '—'}</pre>
+            <pre className="addr">{maskAddress(order.delivery_address, order.id) || '—'}</pre>
           </div>
           <div>
             <h4>Order</h4>

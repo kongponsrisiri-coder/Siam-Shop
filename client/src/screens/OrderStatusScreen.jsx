@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { api } from '../api.js';
 import { useT } from '../lang.jsx';
+import { maskAddress } from '../demo.js';
 
 const money = (n) => '£' + Number(n || 0).toFixed(2);
 
@@ -102,7 +103,7 @@ function OrderResult({ order }) {
           </p>
         )}
         {order.delivery_address && (
-          <p className="muted" style={{ fontSize: 14 }}>Delivering to:<br />{order.delivery_address}</p>
+          <p className="muted" style={{ fontSize: 14 }}>Delivering to:<br />{maskAddress(order.delivery_address, order.id)}</p>
         )}
         <p className="muted" style={{ fontSize: 13 }}>
           Payment: {order.payment_status}{order.payment_method ? ` (${order.payment_method})` : ''}

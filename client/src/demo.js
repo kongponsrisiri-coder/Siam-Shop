@@ -60,10 +60,33 @@ export function demoEmail(seed) {
   return `${name}@${domains[hash(seed) % domains.length]}`;
 }
 
+// Plausible UK addresses for screenshots.
+const STREETS = [
+  'Maple Road', 'High Street', 'Church Lane', 'Victoria Avenue', 'Oak Drive',
+  'Station Road', 'Kingsway', 'Elm Close', 'Park View', 'Queens Road',
+];
+const TOWNS = [
+  ['London', 'SW2 1AB'], ['Manchester', 'M14 5RT'], ['Birmingham', 'B12 9QW'],
+  ['Leeds', 'LS6 3HG'], ['Bristol', 'BS5 7DE'], ['Reading', 'RG1 4PL'],
+  ['Croydon', 'CR0 2NF'], ['Hounslow', 'TW3 1KS'], ['Coventry', 'CV1 5JX'],
+  ['Nottingham', 'NG7 2BX'],
+];
+
+export function demoAddress(seed) {
+  const h = hash(seed);
+  const num = (h % 98) + 1;
+  const street = STREETS[(h >>> 3) % STREETS.length];
+  const [town, postcode] = TOWNS[(h >>> 7) % TOWNS.length];
+  return `${num} ${street}\n${town}\n${postcode}`;
+}
+
 // Convenience: given a real name/email and a seed, return what to display.
 export function maskName(realName, seed) {
   return isDemo() ? demoName(seed) : realName;
 }
 export function maskEmail(realEmail, seed) {
   return isDemo() ? demoEmail(seed) : realEmail;
+}
+export function maskAddress(realAddress, seed) {
+  return isDemo() ? demoAddress(seed) : realAddress;
 }
