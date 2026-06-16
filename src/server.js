@@ -1942,6 +1942,46 @@ app.get('/api/admin/customers/:id', requireAuth, async (req, res) => {
   }
 });
 
+// Delete a customer (GDPR erasure). Their past orders are KEPT for sales/audit
+// history but anonymised — orders.customer_id is set NULL automatically by the
+// FK (ON DELETE SET NULL). Also clears any back-in-stock email signups for them.
+app.delete('/api/admin/customers/:id', requireAuth, async (req, res) => {
+  const client = await pool.connect();
+  try {
+    const shopId = await resolveShopId(req);
+    if (!shopId) return res.status(404).json({ error: 'Shop not found' });
+
+    const { rows } = await client.query(
+      `SELECT id, email,
+              (SELECT COUNT(*) FROM orders o WHERE o.customer_id = $1)::int AS order_count
+       FROM customers WHERE id = $1 AND shop_id = $2`,
+      [req.params.id, shopId]
+    );
+    const cust = rows[0];
+    if (!cust) return res.status(404).json({ error: 'Customer not found' });
+
+    await client.query('BEGIN');
+    // Drop their back-in-stock signups (PII tied to their email).
+    if (cust.email) {
+      await client.query(
+        `DELETE FROM stock_notifications WHERE shop_id = $1 AND LOWER(email) = LOWER($2)`,
+        [shopId, cust.email]
+      );
+    }
+    // Remove the customer; FK ON DELETE SET NULL anonymises their orders.
+    await client.query(`DELETE FROM customers WHERE id = $1 AND shop_id = $2`, [req.params.id, shopId]);
+    await client.query('COMMIT');
+
+    res.json({ ok: true, anonymised_orders: cust.order_count });
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('[admin/customers DELETE]', err.message);
+    res.status(500).json({ error: 'Failed to delete customer' });
+  } finally {
+    client.release();
+  }
+});
+
 // ---------------------------------------------------------------------------
 // Stripe webhook (skeleton — full lifecycle in SIAMSHOP-009)
 // ---------------------------------------------------------------------------

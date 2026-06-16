@@ -14,9 +14,10 @@ function orderState(o) {
   return { label: 'Paid', cls: 'ok' };
 }
 
-function CustomerDetail({ id, onBack }) {
+function CustomerDetail({ id, onBack, onDeleted }) {
   const [cust, setCust] = useState(null);
   const [error, setError] = useState('');
+  const [deleting, setDeleting] = useState(false);
 
   useEffect(() => {
     setError('');
@@ -25,6 +26,27 @@ function CustomerDetail({ id, onBack }) {
       .then(setCust)
       .catch((e) => setError(e.message));
   }, [id]);
+
+  async function handleDelete() {
+    const orders = (cust && (cust.order_count ?? (cust.orders || []).length)) || 0;
+    const msg =
+      `Delete ${cust?.name || cust?.email || 'this customer'}?\n\n` +
+      `This permanently removes their account and contact details` +
+      (orders > 0
+        ? `.\nTheir ${orders} past order${orders === 1 ? '' : 's'} will be kept for your sales records but no longer linked to a named customer.`
+        : `.`) +
+      `\n\nThis cannot be undone.`;
+    if (!window.confirm(msg)) return;
+    setDeleting(true);
+    setError('');
+    try {
+      await api.adminDeleteCustomer(id);
+      onDeleted();
+    } catch (e) {
+      setError(e.message);
+      setDeleting(false);
+    }
+  }
 
   if (error) return (
     <div className="center err">
@@ -39,7 +61,12 @@ function CustomerDetail({ id, onBack }) {
     <div>
       <div className="row" style={{ marginTop: 16 }}>
         <button className="btn ghost" onClick={onBack}>← Back to customers</button>
+        <div className="spacer" />
+        <button className="btn danger" onClick={handleDelete} disabled={deleting}>
+          {deleting ? 'Deleting…' : '🗑 Delete customer'}
+        </button>
       </div>
+      {error && <div className="center err">{error}</div>}
 
       <div className="panel">
         <h2 style={{ marginTop: 0 }}>{cust.name || '—'}</h2>
@@ -151,7 +178,16 @@ export default function CustomersSection() {
   }
 
   if (selected != null) {
-    return <CustomerDetail id={selected} onBack={() => setSelected(null)} />;
+    return (
+      <CustomerDetail
+        id={selected}
+        onBack={() => setSelected(null)}
+        onDeleted={() => {
+          setSelected(null);
+          load();
+        }}
+      />
+    );
   }
 
   return (

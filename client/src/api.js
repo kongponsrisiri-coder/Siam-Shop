@@ -116,6 +116,7 @@ export const api = {
   // Admin CRM
   adminListCustomers: (consentOnly) => request(`/api/admin/customers${consentOnly ? '?consent=1' : ''}`, { authed: true }),
   adminGetCustomer: (id) => request(`/api/admin/customers/${id}`, { authed: true }),
+  adminDeleteCustomer: (id) => request(`/api/admin/customers/${id}`, { method: 'DELETE', authed: true }),
   exportCustomersCsv: async (consentOnly) => {
     const res = await fetch(`${API_BASE}/api/admin/customers.csv${consentOnly ? '?consent=1' : ''}`, {
       headers: { Authorization: `Bearer ${auth.get()}` },

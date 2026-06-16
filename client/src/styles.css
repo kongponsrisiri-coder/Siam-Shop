@@ -67,6 +67,8 @@ a:hover { text-decoration: underline; }
 .btn:hover { opacity: 0.92; }
 .btn.secondary { background: #fff; color: var(--ink); border: 1px solid var(--line); }
 .btn.ghost { background: transparent; color: var(--siam-red); padding: 6px 8px; }
+.btn.danger { background: #fff; color: #b91c1c; border: 1px solid #fca5a5; }
+.btn.danger:hover { background: #fee2e2; opacity: 1; }
 .btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
 /* Product grid */
