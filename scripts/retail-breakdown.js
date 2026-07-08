@@ -36,13 +36,27 @@ function parse(name) {
   return { count: 1, sizeLabel: s ? `${s[1]}${unitLower(s[2])}` : '' };
 }
 
-// Strip pack/case wording; keep brand + product + a single size.
+// Tidy wholesale trade jargon into consumer-readable wording.
+function tidyJargon(n) {
+  return n
+    .replace(/\bpd\b/ig, 'Peeled')          // peeled & deveined
+    .replace(/\bhlso\b/ig, 'Shell-on')      // headless shell-on
+    .replace(/\bhoso\b/ig, 'Head-on')       // head-on shell-on
+    .replace(/\biqf\b/ig, ' ')              // individually quick frozen
+    .replace(/\bu\s?\d+\b/ig, ' ')          // prawn size grade U5/U10
+    .replace(/\b\d+\/\d+\b/g, ' ')          // prawn count grade 26/30
+    .replace(/\b\d+%\s*/g, ' ')             // "40% ..."
+    .replace(/\b(air\s*freight|glaze|reg|frz)\b/ig, ' ')
+    .replace(/\bnet\b/ig, ' ');
+}
+
+// Strip pack/case wording; keep brand + product + a single size, then tidy jargon.
 function retailName(name, sizeLabel) {
   let n = name
     .replace(PACK_RE, ' ')                              // drop "24X400ML"
     .replace(/\/\s*(case|pack|gallon|bag|box)\b/ig, ' ') // drop "/ Case", "/ Pack"
-    .replace(/\bnet\b/ig, ' ')
-    .replace(/\(halal\)/ig, ' (Halal)')
+    .replace(/\(halal\)/ig, ' (Halal)');
+  n = tidyJargon(n)
     .replace(/\s{2,}/g, ' ')
     .replace(/\s+([,)])/g, '$1')
     .trim();
