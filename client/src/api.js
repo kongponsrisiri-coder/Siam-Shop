@@ -65,6 +65,8 @@ export const api = {
     request(`/api/products/${id}/notify`, { method: 'POST', body: { email } }),
   deliveryQuote: (postcode) =>
     request('/api/delivery-quote', { method: 'POST', body: { postcode } }),
+  assistant: (messages, basket) =>
+    request('/api/assistant', { method: 'POST', body: { messages, basket } }),
   checkoutSession: (body) =>
     request('/api/checkout/session', { method: 'POST', body }),
   createOrder: (body) => request('/api/orders', { method: 'POST', body }),

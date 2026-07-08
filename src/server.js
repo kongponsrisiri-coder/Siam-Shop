@@ -21,6 +21,7 @@ const delivery = require('./services/delivery');
 const messenger = require('./services/messengerService');
 const emailService = require('./services/emailService');
 const carriers = require('./services/carriers');
+const assistant = require('./services/assistantService');
 
 const app = express();
 
@@ -532,6 +533,46 @@ app.post('/api/delivery-quote', async (req, res) => {
   } catch (err) {
     console.error('[delivery-quote]', err.message);
     res.status(500).json({ error: 'Failed to quote delivery' });
+  }
+});
+
+// AI shopping assistant — bilingual chat over the live in-stock catalogue; can
+// propose products to add to the basket (recipe → ingredients) and is aware of
+// what's already in the customer's basket so it won't add duplicates.
+app.post('/api/assistant', lookupLimiter, async (req, res) => {
+  try {
+    if (!assistant.isConfigured()) {
+      return res.status(503).json({ error: 'The assistant is not available right now.' });
+    }
+    const shopId = await resolveShopId(req);
+    if (!shopId) return res.status(404).json({ error: 'Shop not found' });
+
+    const { rows: products } = await pool.query(
+      `SELECT p.id, p.name, p.name_th, p.price, p.stock_qty, p.track_stock, c.name AS category
+       FROM products p LEFT JOIN categories c ON c.id = p.category_id
+       WHERE p.shop_id = $1 AND p.is_active = TRUE
+         AND (p.track_stock = FALSE OR p.stock_qty > 0)   -- in-stock only
+       ORDER BY c.sort_order NULLS LAST, p.name`,
+      [shopId]
+    );
+    const settings = await getSettings(shopId);
+    const { rows: shopRows } = await pool.query(`SELECT name FROM shops WHERE id = $1`, [shopId]);
+    const shopName = shopRows[0]?.name || 'SiamShop';
+    const basket = Array.isArray(req.body?.basket) ? req.body.basket : [];
+    const { reply, add } = await assistant.chat({ messages: req.body?.messages, products, settings, shopName, basket });
+
+    const inBasket = new Set(basket.map((b) => Number(b.id ?? b.product_id)).filter(Boolean));
+    const byId = new Map(products.map((p) => [p.id, p]));
+    const items = add
+      .filter((a) => !inBasket.has(a.product_id))
+      .map((a) => {
+        const p = byId.get(a.product_id);
+        return { product_id: a.product_id, qty: a.qty, name: p.name, name_th: p.name_th, price: Number(p.price) };
+      });
+    res.json({ reply, add: items });
+  } catch (err) {
+    console.error('[assistant]', err.message);
+    res.status(500).json({ error: 'The assistant had a problem — please try again.' });
   }
 });
 

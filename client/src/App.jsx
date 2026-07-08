@@ -3,6 +3,7 @@ import { Routes, Route, Link, Navigate } from 'react-router-dom';
 import { useCart } from './cart.jsx';
 import { useLang, useT } from './lang.jsx';
 import { Logo } from './components/Logo.jsx';
+import Assistant from './components/Assistant.jsx';
 
 import StorefrontScreen from './screens/StorefrontScreen.jsx';
 import ProductScreen from './screens/ProductScreen.jsx';
@@ -73,6 +74,7 @@ export default function App() {
               <Route path="/admin/*" element={<AdminScreen />} />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>
+            <Assistant />
           </>
         }
       />
