@@ -28,12 +28,10 @@ function unitLower(u) {
   return { KG: 'kg', G: 'g', ML: 'ml', L: 'L', LTR: 'L', LITRE: 'L', GALLON: 'L' }[m] || m.toLowerCase();
 }
 
-// Returns { count, sizeLabel } — count = units per case (1 for single packs).
-function parse(name) {
-  const m = name.match(PACK_RE);
-  if (m) return { count: Number(m[1]) || 1, sizeLabel: `${m[2]}${unitLower(m[3])}` };
-  const s = name.match(SINGLE_RE);
-  return { count: 1, sizeLabel: s ? `${s[1]}${unitLower(s[2])}` : '' };
+// Grams for a size like "100g" / "1.5kg".
+function grams(val, u) {
+  const n = parseFloat(val);
+  return String(u).toLowerCase() === 'kg' ? n * 1000 : n;
 }
 
 // Tidy wholesale trade jargon into consumer-readable wording.
@@ -54,7 +52,9 @@ function tidyJargon(n) {
 function retailName(name, sizeLabel) {
   let n = name
     .replace(PACK_RE, ' ')                              // drop "24X400ML"
-    .replace(/\/\s*(case|pack|gallon|bag|box)\b/ig, ' ') // drop "/ Case", "/ Pack"
+    .replace(/\(\s*[\d.]+\s*(?:g|kg|ml)\s*\/?\s*(?:pack|loose)?\s*\)/ig, ' ') // drop "( 100g/pack)"
+    .replace(/\/\s*(case|pack|gallon|bag|box|kg|loose)\b/ig, ' ') // drop "/ Case", "/ Kg"
+    .replace(/\(\s*loose\s*\)/ig, ' ')
     .replace(/\(halal\)/ig, ' (Halal)');
   n = tidyJargon(n)
     .replace(/\s{2,}/g, ' ')
@@ -74,11 +74,28 @@ function niceRound(v) {
 }
 
 function toRetail(p) {
-  const { count, sizeLabel } = parse(p.name);
-  const perUnitCost = Number(p.price) / (count || 1);
+  const name0 = p.name;
+  const m = name0.match(PACK_RE);
+  let count = 1, sizeLabel = '', perUnitCost = Number(p.price), retUnit = 'each';
+  if (m) {
+    // multi-pack case "N x SIZE" → one unit; divide the case price by N
+    count = Number(m[1]) || 1;
+    sizeLabel = `${m[2]}${unitLower(m[3])}`;
+    perUnitCost = Number(p.price) / count;
+  } else if (String(p.unit).toLowerCase() === 'kg') {
+    // priced PER KILO — if sold as a pack ("(100g/pack)"), scale £/kg by the pack fraction
+    const pk = name0.match(/\(\s*([\d.]+)\s*(g|kg|ml)\b/i);
+    if (pk) { perUnitCost = Number(p.price) * (grams(pk[1], pk[2]) / 1000); sizeLabel = `${pk[1]}${unitLower(pk[2])}`; }
+    else { retUnit = 'kg'; }               // loose produce → keep selling by the kg
+  } else {
+    const s = name0.match(SINGLE_RE);       // already a single pack
+    sizeLabel = s ? `${s[1]}${unitLower(s[2])}` : '';
+  }
   const price = niceRound(perUnitCost * MARKUP);
-  return { id: p.id, name: retailName(p.name, sizeLabel), price, unit: 'each', count, sizeLabel,
-           was: { name: p.name, price: Number(p.price), unit: p.unit } };
+  let name = retailName(name0, sizeLabel);
+  if (retUnit === 'kg') name = `${name} (per kg)`;
+  return { id: p.id, name, price, unit: retUnit, count, sizeLabel, perUnitCost,
+           was: { name: name0, price: Number(p.price), unit: p.unit } };
 }
 
 // --- run -----------------------------------------------------------------
@@ -90,15 +107,23 @@ async function fromDb() {
   const { rows: shopRows } = await pool.query(`SELECT id FROM shops WHERE slug=$1`, [SHOP_SLUG]);
   if (!shopRows[0]) { console.error(`No shop "${SHOP_SLUG}".`); process.exit(1); }
   const shopId = shopRows[0].id;
+  // Re-derive from the WHOLESALE source (products.json, matched by sku) so a re-run
+  // always recomputes from the original — never double-processes already-broken rows.
+  const src = new Map(
+    JSON.parse(fs.readFileSync(path.join(__dirname, 'products.json'), 'utf8')).map((p) => [p.sku, p])
+  );
   const { rows } = await pool.query(
-    `SELECT id, name, price, unit FROM products WHERE shop_id=$1 ORDER BY id`, [shopId]);
-  const changes = rows.map(toRetail);
+    `SELECT id, sku, name, price, unit FROM products WHERE shop_id=$1 ORDER BY id`, [shopId]);
+  const changes = rows.map((r) => {
+    const o = r.sku && src.get(r.sku);
+    return toRetail(o ? { id: r.id, name: o.name, price: o.price, unit: o.unit } : r);
+  });
   preview(changes);
   if (!APPLY) { console.log('\n(dry run — nothing written. Re-run with APPLY=1 to apply.)'); await pool.end(); return; }
   let n = 0;
   for (const c of changes) {
     await pool.query(`UPDATE products SET name=$2, price=$3, unit=$4, cost_price=$5 WHERE id=$1 AND shop_id=$6`,
-      [c.id, c.name, c.price, c.unit, Math.round((c.was.price / (c.count || 1)) * 100) / 100, shopId]);
+      [c.id, c.name, c.price, c.unit, Math.round(c.perUnitCost * 100) / 100, shopId]);
     n++;
   }
   console.log(`\n✅ Applied retail breakdown to ${n} products on "${SHOP_SLUG}".`);
