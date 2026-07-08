@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { api } from '../../api.js';
+import PhotoButton from '../../components/PhotoButton.jsx';
 
 const EMPTY = {
   name: '',
@@ -146,7 +147,18 @@ function ProductForm({ initial, categories, onSave, onCancel }) {
           <input type="number" value={form.sort_order ?? ''} onChange={(e) => set('sort_order', e.target.value)} />
         </div>
       </div>
-      <label>Image URL</label>
+      <label>Photo</label>
+      {initial?.id ? (
+        <PhotoButton
+          product={{ id: initial.id, image_url: form.image_url }}
+          onDone={(u) => set('image_url', u.image_url || '')}
+        />
+      ) : (
+        <p className="muted" style={{ fontSize: 13, margin: '2px 0 8px' }}>
+          Save the product first, then add a photo (take one with your phone camera).
+        </p>
+      )}
+      <label>…or paste an image URL</label>
       <input value={form.image_url || ''} onChange={(e) => set('image_url', e.target.value)} />
       <label className="row" style={{ marginTop: 12, gap: 8 }}>
         <input
@@ -249,6 +261,7 @@ export default function ProductsSection() {
             <table>
               <thead>
                 <tr>
+                  <th>Photo</th>
                   <th>Name</th>
                   <th>Category</th>
                   <th>Price</th>
@@ -260,6 +273,15 @@ export default function ProductsSection() {
               <tbody>
                 {products.map((p) => (
                   <tr key={p.id}>
+                    <td>
+                      <PhotoButton
+                        product={p}
+                        compact
+                        onDone={(u) =>
+                          setProducts((ps) => ps.map((x) => (x.id === u.id ? { ...x, image_url: u.image_url } : x)))
+                        }
+                      />
+                    </td>
                     <td>
                       {p.name}
                       {p.name_th && <div className="muted" style={{ fontSize: 12 }}>{p.name_th}</div>}

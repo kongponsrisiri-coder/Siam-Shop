@@ -82,6 +82,10 @@ export const api = {
   updateProduct: (id, p) => request(`/api/admin/products/${id}`, { method: 'PUT', body: p, authed: true }),
   deleteProduct: (id) => request(`/api/admin/products/${id}`, { method: 'DELETE', authed: true }),
   aiDescribeProduct: (body) => request('/api/admin/products/ai-describe', { method: 'POST', body, authed: true }),
+  uploadProductPhoto: (id, dataUrl) =>
+    request(`/api/admin/products/${id}/photo`, { method: 'POST', body: { dataUrl }, authed: true }),
+  deleteProductPhoto: (id) =>
+    request(`/api/admin/products/${id}/photo`, { method: 'DELETE', authed: true }),
 
   // Admin settings
   adminGetSettings: () => request('/api/admin/settings', { authed: true }),

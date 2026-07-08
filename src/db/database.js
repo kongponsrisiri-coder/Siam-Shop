@@ -187,6 +187,11 @@ async function initDB() {
     await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS weight_grams INTEGER`);
     await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS sort_order INTEGER NOT NULL DEFAULT 0`);
     await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS category_id INTEGER REFERENCES categories(id) ON DELETE SET NULL`);
+    // Product photos captured in the back office are stored in-DB (bytea) and
+    // served at /img/product/:id — self-contained, survives redeploys, no S3.
+    await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS image_data BYTEA`);
+    await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS image_mime VARCHAR(40)`);
+    await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS image_updated_at TIMESTAMPTZ`);
     // orders: source is finer-grained than channel (instore|online). For online
     // orders, source distinguishes website|messenger|manual (Messenger bot, etc.).
     await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS source VARCHAR(20) NOT NULL DEFAULT 'website'`);

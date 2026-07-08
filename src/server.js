@@ -933,6 +933,83 @@ app.get('/api/products/:id', async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
+// Product photos (SIAMSHOP-410) — captured in the back office, stored in-DB,
+// served here. Public read; write is admin-only and shop-scoped.
+// ---------------------------------------------------------------------------
+
+// Serve a product photo. Registered before express.static so /img/... resolves
+// to bytes, not the SPA shell. ETag from image_updated_at → cheap revalidation.
+app.get('/img/product/:id', async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT image_data, image_mime, image_updated_at FROM products WHERE id = $1`,
+      [req.params.id]
+    );
+    const row = rows[0];
+    if (!row || !row.image_data) return res.status(404).end();
+    const etag = row.image_updated_at ? `"${new Date(row.image_updated_at).getTime()}"` : undefined;
+    if (etag && req.get('if-none-match') === etag) return res.status(304).end();
+    res.set('Content-Type', row.image_mime || 'image/jpeg');
+    res.set('Cache-Control', 'public, max-age=60, must-revalidate');
+    if (etag) res.set('ETag', etag);
+    res.send(row.image_data);
+  } catch (err) {
+    console.error('[img/product]', err.message);
+    res.status(500).end();
+  }
+});
+
+// Upload / replace a product photo. Body: { dataUrl: "data:image/jpeg;base64,…" }
+// (the client compresses to ~1000px before sending). Sets image_url to the
+// served path with a cache-busting version so storefront thumbnails refresh.
+app.post('/api/admin/products/:id/photo', requireAuth, async (req, res) => {
+  try {
+    const shopId = await resolveShopId(req);
+    if (!shopId) return res.status(404).json({ error: 'Shop not found' });
+    const dataUrl = (req.body && req.body.dataUrl) || '';
+    const m = /^data:(image\/(?:jpeg|png|webp));base64,([A-Za-z0-9+/=]+)$/.exec(dataUrl);
+    if (!m) return res.status(400).json({ error: 'Expected a JPEG, PNG or WebP image.' });
+    const mime = m[1];
+    const buf = Buffer.from(m[2], 'base64');
+    if (buf.length > 6 * 1024 * 1024) return res.status(413).json({ error: 'Image too large — please retake.' });
+    const version = Date.now();
+    const imageUrl = `/img/product/${req.params.id}?v=${version}`;
+    const { rows } = await pool.query(
+      `UPDATE products
+         SET image_data = $3, image_mime = $4, image_updated_at = NOW(), image_url = $5
+       WHERE id = $1 AND shop_id = $2
+       RETURNING id, image_url`,
+      [req.params.id, shopId, buf, mime, imageUrl]
+    );
+    if (!rows[0]) return res.status(404).json({ error: 'Product not found' });
+    res.json(rows[0]);
+  } catch (err) {
+    console.error('[admin/products photo POST]', err.message);
+    res.status(500).json({ error: 'Failed to save photo' });
+  }
+});
+
+// Remove a product photo.
+app.delete('/api/admin/products/:id/photo', requireAuth, async (req, res) => {
+  try {
+    const shopId = await resolveShopId(req);
+    if (!shopId) return res.status(404).json({ error: 'Shop not found' });
+    const { rows } = await pool.query(
+      `UPDATE products
+         SET image_data = NULL, image_mime = NULL, image_updated_at = NULL, image_url = NULL
+       WHERE id = $1 AND shop_id = $2
+       RETURNING id, image_url`,
+      [req.params.id, shopId]
+    );
+    if (!rows[0]) return res.status(404).json({ error: 'Product not found' });
+    res.json(rows[0]);
+  } catch (err) {
+    console.error('[admin/products photo DELETE]', err.message);
+    res.status(500).json({ error: 'Failed to remove photo' });
+  }
+});
+
+// ---------------------------------------------------------------------------
 // Admin — products CRUD (every query scoped to shop_id)
 // ---------------------------------------------------------------------------
 app.get('/api/admin/products', requireAuth, async (req, res) => {
