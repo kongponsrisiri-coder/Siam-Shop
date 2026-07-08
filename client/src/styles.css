@@ -409,3 +409,21 @@ th { color: var(--muted); font-weight: 600; }
   background: rgba(255,255,255,.6); font-weight: 700; }
 .photo-btn.compact .photo-thumb { width: 48px; height: 48px; border-radius: 8px; }
 .photo-actions { display: flex; gap: 6px; }
+
+/* Photo studio — snap-first bulk photo tagging (SIAMSHOP-410) */
+.studio-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 14px; margin-top: 16px; }
+.studio-card { border: 1px solid var(--line); border-radius: 12px; overflow: hidden; background: #fff; }
+.studio-card.is-done { border-color: #86c58b; }
+.studio-img { position: relative; height: 150px; background-size: cover; background-position: center; background-color: #faf7f2; }
+.studio-tick { position: absolute; top: 8px; right: 8px; width: 28px; height: 28px; border-radius: 50%;
+  background: #2e7d32; color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 700; }
+.studio-body { padding: 12px; }
+.studio-assigned { color: #2e7d32; font-size: 14px; }
+.studio-menu { position: absolute; z-index: 20; left: 0; right: 0; top: calc(100% + 4px);
+  background: #fff; border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 10px 26px rgba(0,0,0,.14);
+  max-height: 260px; overflow-y: auto; }
+.studio-opt { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;
+  padding: 8px 10px; background: none; border: 0; border-bottom: 1px solid var(--line); cursor: pointer; font-size: 14px; }
+.studio-opt:last-child { border-bottom: 0; }
+.studio-opt:hover { background: #faf5ef; }
+.studio-opt-thumb { width: 30px; height: 30px; border-radius: 6px; object-fit: cover; flex: 0 0 auto; }

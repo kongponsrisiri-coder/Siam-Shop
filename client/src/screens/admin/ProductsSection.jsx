@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { api } from '../../api.js';
 import PhotoButton from '../../components/PhotoButton.jsx';
+import PhotoStudio from './PhotoStudio.jsx';
 
 const EMPTY = {
   name: '',
@@ -193,6 +194,7 @@ export default function ProductsSection() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [editing, setEditing] = useState(null); // null | {} | product
+  const [studio, setStudio] = useState(false); // snap-first bulk photo flow
 
   async function load() {
     setLoading(true);
@@ -231,6 +233,18 @@ export default function ProductsSection() {
     await load();
   }
 
+  if (studio) {
+    return (
+      <PhotoStudio
+        products={products}
+        onDone={(u) =>
+          setProducts((ps) => ps.map((x) => (x.id === u.id ? { ...x, image_url: u.image_url } : x)))
+        }
+        onClose={() => setStudio(false)}
+      />
+    );
+  }
+
   if (editing !== null) {
     return (
       <ProductForm
@@ -247,6 +261,7 @@ export default function ProductsSection() {
       <div className="row" style={{ marginTop: 16 }}>
         <h2 style={{ margin: 0 }}>Products</h2>
         <div className="spacer" />
+        <button className="btn secondary" onClick={() => setStudio(true)}>📷 Photo studio</button>
         <button className="btn" onClick={() => setEditing({})}>+ New product</button>
       </div>
 
