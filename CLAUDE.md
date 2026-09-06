@@ -181,7 +181,7 @@ MESSENGER_PAGE_ACCESS_TOKEN ← Page token (send replies via Graph API)
 
 Built around the shared stock core. Surfaces in build order:
 
-**M1 — In-store EPOS till + stock core** ← *building now*
+**M1 — In-store EPOS till + stock core** ✅ shipped (`/till`, `/api/sales`, stock ledger)
 - **SIAMSHOP-101** ✅ DONE — Scaffold (was SIAMSHOP-001): DB, Express server, HMAC
   auth, React+Vite client (storefront/admin), Stripe + Brevo services.
 - **SIAMSHOP-102** — Stock core: products gain `barcode/sku/cost_price/unit`;
@@ -191,30 +191,46 @@ Built around the shared stock core. Surfaces in build order:
   sale (transactional: decrement stock + log movement + order channel=instore).
 - **SIAMSHOP-104** — "Today's sales" report (takings by channel + payment method).
 
-**M2 — Phone scanner PWA (input system)**
+**M2 — Phone scanner PWA (input system)** ✅ shipped (`/scan`: checkout, goods-in, stocktake, invoice scan)
 - **SIAMSHOP-201** — Camera barcode scanning (BarcodeDetector / ZXing) on a mobile PWA.
 - **SIAMSHOP-202** — Modes: in-store checkout, goods-in (receive stock), stocktake (count + variance).
 - **SIAMSHOP-203** — AI invoice scanner: photo → Anthropic vision → line items → goods-in.
 
-**M3 — Website on shared stock**
+**M3 — Website on shared stock** ✅ shipped (`/shop`, Stripe Checkout + webhook, Brevo emails)
 - **SIAMSHOP-301** — Wire scaffolded storefront → Stripe Checkout; online orders decrement shared stock.
 - **SIAMSHOP-302** — Order confirmation emails (Brevo: customer receipt + shop notification).
 - **SIAMSHOP-303** — Stripe webhook lifecycle (paid/failed/refund → stock restore).
 
-**M4 — Back-office & ops**
+**M4 — Back-office & ops** — partly shipped (dashboard, reports, CRM, photo studio, AI describe)
 - **SIAMSHOP-401** — Cross-channel sales reporting + dashboards.
 - **SIAMSHOP-402** — Stock levels, low-stock alerts, stocktake history.
 - **SIAMSHOP-403** — AI product descriptions; **SIAMSHOP-404** — delivery zones/fees;
   **SIAMSHOP-405** — customer accounts; **SIAMSHOP-406** — multi-shop slug routing.
+
+**M5 — Food counter on the grocery till** ← *building next (client: Cha & Pinto Box, Guildford)*
+Full spec: `docs/tickets/SIAMSHOP-M5-food-counter.md`
+- **SIAMSHOP-501** — Product options: option groups + priced choices (size / toppings /
+  add-ons), server-side authoritative pricing, `order_items.options_snapshot`.
+- **SIAMSHOP-502** — `products.kind` (retail | food) + **bug fix:** `/api/sales` must honour
+  `track_stock` (today it rejects/decrements made-to-order items).
+- **SIAMSHOP-503** — Availability windows per category (lunch 12–3 Mon–Sat, boba hours) +
+  shop opening hours; enforced at the pickup time, warning-only at the till.
+- **SIAMSHOP-504** — Click & Collect: `orders.fulfilment` (delivery | collection | dine_in),
+  pickup slots, `ready` status + "ready to collect" Brevo email.
+- **SIAMSHOP-505** — Prep screen `/prep` for the counter (food lines + options, pickup time,
+  Start/Ready/Done, 80 mm print CSS).
+- **SIAMSHOP-506** — Cha & Pinto onboarding: `chapinto-shop` fork + Railway, brand re-skin,
+  Wix Stores CSV import (~299 SKUs), menu build, cut-over from Wix.
 
 ### Decisions / assumptions
 - In-store **card** payments are *recorded only* (shop uses its existing card
   terminal). Full Stripe Terminal hardware is a later milestone. Cash is fully
   handled (tender → change).
 
-### First prospect
-One Thai supermarket in the UK has expressed interest. Goal: a working in-store
-till (M1) they can ring up sales on, then the phone scanner (M2) for stock.
+### Clients / prospects
+- **Cha & Pinto Box** (Guildford, ex-Rumwong Thai Market) — Thai grocery + grab-and-go café,
+  currently on Wix with two separate carts. Target for M5 (one till + one shop for both sides).
+- Thann Shop (thannshop.co.uk) and the main SiamShop demo are live on the same codebase.
 
 ---
 

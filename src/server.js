@@ -143,6 +143,13 @@ function requireCustomer(req, res, next) {
 
 // Small helper to throw an error that carries an HTTP status through a try/catch
 // (used inside transactions so a failed line rolls the whole sale back).
+// products.kind (SIAMSHOP-502): 'retail' = shelf stock, 'food' = made to order
+// at the counter (shows on the prep screen, usually track_stock = FALSE).
+const PRODUCT_KINDS = ['retail', 'food'];
+function productKind(v) {
+  return PRODUCT_KINDS.includes(v) ? v : 'retail';
+}
+
 function httpError(status, message) {
   const e = new Error(message);
   e.httpStatus = status;
@@ -192,6 +199,86 @@ async function upsertCustomer(client, shopId, customer) {
   return rows[0].id;
 }
 
+// ---------------------------------------------------------------------------
+// Product options (SIAMSHOP-501) — size / toppings / add-ons.
+// ---------------------------------------------------------------------------
+
+// Attach option_groups[] (each with options[]) to a list of product rows in ONE
+// query. Inactive options are dropped, and a group left with no options is
+// omitted so the picker never shows an empty question.
+async function attachOptionGroups(rows, db = pool) {
+  if (!rows || rows.length === 0) return rows;
+  const ids = rows.map((r) => r.id);
+  const { rows: groups } = await db.query(
+    `SELECT g.id, g.product_id, g.name, g.name_th, g.min_select, g.max_select, g.sort_order,
+            COALESCE(json_agg(json_build_object(
+              'id', o.id, 'name', o.name, 'name_th', o.name_th,
+              'price_delta', o.price_delta, 'is_default', o.is_default, 'sort_order', o.sort_order
+            ) ORDER BY o.sort_order, o.id) FILTER (WHERE o.id IS NOT NULL), '[]') AS options
+     FROM product_option_groups g
+     LEFT JOIN product_options o ON o.group_id = g.id AND o.is_active = TRUE
+     WHERE g.product_id = ANY($1::int[])
+     GROUP BY g.id
+     ORDER BY g.sort_order, g.id`,
+    [ids]
+  );
+  const byProduct = new Map();
+  for (const g of groups) {
+    if (!g.options.length) continue;
+    const list = byProduct.get(g.product_id) || [];
+    list.push({ ...g, options: g.options.map((o) => ({ ...o, price_delta: Number(o.price_delta) })) });
+    byProduct.set(g.product_id, list);
+  }
+  for (const r of rows) r.option_groups = byProduct.get(r.id) || [];
+  return rows;
+}
+
+// Validate a basket line's chosen option ids against the product's groups and
+// price them. Returns { snapshot: [{group, name, name_th, price_delta}] | null,
+// total } where total is the per-unit add-on. Throws 400 on anything the client
+// got wrong — the client never dictates a price (same rule as Stripe amounts).
+async function resolveOptions(db, product, optionIds) {
+  const ids = Array.isArray(optionIds)
+    ? [...new Set(optionIds.map(Number).filter((n) => Number.isInteger(n)))]
+    : [];
+  const [withGroups] = await attachOptionGroups([{ id: product.id }], db);
+  const groups = withGroups.option_groups;
+  if (groups.length === 0) {
+    if (ids.length) throw httpError(400, `${product.name} has no options`);
+    return { snapshot: null, total: 0 };
+  }
+  const known = new Set();
+  for (const g of groups) for (const o of g.options) known.add(o.id);
+  for (const id of ids) if (!known.has(id)) throw httpError(400, `Invalid option for ${product.name}`);
+
+  const snapshot = [];
+  let total = 0;
+  for (const g of groups) {
+    const chosen = g.options.filter((o) => ids.includes(o.id));
+    if (chosen.length < g.min_select) {
+      throw httpError(400, `${product.name}: choose at least ${g.min_select} for ${g.name}`);
+    }
+    if (chosen.length > g.max_select) {
+      throw httpError(400, `${product.name}: choose at most ${g.max_select} for ${g.name}`);
+    }
+    for (const o of chosen) {
+      snapshot.push({ group: g.name, name: o.name, name_th: o.name_th || undefined, price_delta: o.price_delta });
+      total += o.price_delta;
+    }
+  }
+  return { snapshot, total: +total.toFixed(2) };
+}
+
+// "Large, Chilli Basil Pork, Fried Egg" — for Stripe line names, Messenger
+// summaries and plain-text receipts. Empty string when no options.
+function describeOptions(snapshot) {
+  return (Array.isArray(snapshot) ? snapshot : []).map((o) => o.name).join(', ');
+}
+function itemLabel(it) {
+  const opts = describeOptions(it.options_snapshot);
+  return (it.name_snapshot || it.name) + (opts ? ` (${opts})` : '');
+}
+
 // Create a PENDING online order from a basket. Recomputes all prices and the
 // delivery fee server-side (never trusts the client), enforces the minimum
 // order, and writes order + items. Stock is NOT decremented here — that happens
@@ -205,7 +292,7 @@ async function createPendingOrder(client, shopId, body, { paymentMethod, source 
   const quote = quoteDelivery(settings, body?.postcode);
   if (!quote) throw httpError(400, 'Enter a valid UK postcode for delivery');
 
-  // Recompute subtotal from live prices + snapshot each line.
+  // Recompute subtotal from live prices (+ chosen options) and snapshot each line.
   let subtotal = 0;
   const lines = [];
   for (const it of items) {
@@ -217,9 +304,10 @@ async function createPendingOrder(client, shopId, body, { paymentMethod, source 
     );
     const p = rows[0];
     if (!p) throw httpError(404, `Product ${it.product_id} is unavailable`);
-    const lineTotal = Number(p.price) * qty;
+    const { snapshot, total: optionsTotal } = await resolveOptions(client, p, it.option_ids);
+    const lineTotal = +((Number(p.price) + optionsTotal) * qty).toFixed(2);
     subtotal += lineTotal;
-    lines.push({ product: p, qty, lineTotal });
+    lines.push({ product: p, qty, lineTotal, snapshot, optionsTotal });
   }
 
   const minOrder = Number(settings.minimum_order_amount || 0);
@@ -243,9 +331,11 @@ async function createPendingOrder(client, shopId, body, { paymentMethod, source 
 
   for (const ln of lines) {
     await client.query(
-      `INSERT INTO order_items (order_id, product_id, name_snapshot, price_snapshot, qty, line_total)
-       VALUES ($1,$2,$3,$4,$5,$6)`,
-      [orderId, ln.product.id, ln.product.name, ln.product.price, ln.qty, ln.lineTotal]
+      `INSERT INTO order_items (order_id, product_id, name_snapshot, price_snapshot, qty, line_total,
+                                options_snapshot, options_total)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+      [orderId, ln.product.id, ln.product.name, ln.product.price, ln.qty, ln.lineTotal,
+       ln.snapshot ? JSON.stringify(ln.snapshot) : null, ln.optionsTotal]
     );
   }
 
@@ -265,13 +355,17 @@ async function fulfilOrder(orderId, baseUrl) {
     if (order.payment_status === 'paid') { await client.query('ROLLBACK'); return { ok: true, already: true }; }
 
     const { rows: items } = await client.query(
-      `SELECT product_id, name_snapshot, qty, line_total FROM order_items WHERE order_id = $1`,
+      `SELECT oi.product_id, oi.name_snapshot, oi.price_snapshot, oi.qty, oi.line_total,
+              oi.options_snapshot, oi.options_total, p.track_stock
+       FROM order_items oi LEFT JOIN products p ON p.id = oi.product_id
+       WHERE oi.order_id = $1`,
       [orderId]
     );
     for (const it of items) {
-      if (!it.product_id) continue;
+      // Made-to-order / untracked items (SIAMSHOP-502) never touch the ledger.
+      if (!it.product_id || !it.track_stock) continue;
       await client.query(
-        `UPDATE products SET stock_qty = stock_qty - $1 WHERE id = $2 AND track_stock = TRUE`,
+        `UPDATE products SET stock_qty = stock_qty - $1 WHERE id = $2`,
         [it.qty, it.product_id]
       );
       await client.query(
@@ -567,8 +661,10 @@ app.post('/api/assistant', lookupLimiter, async (req, res) => {
       .filter((a) => !inBasket.has(a.product_id))
       .map((a) => {
         const p = byId.get(a.product_id);
-        return { product_id: a.product_id, qty: a.qty, name: p.name, name_th: p.name_th, price: Number(p.price) };
+        return { id: p.id, product_id: a.product_id, qty: a.qty, name: p.name, name_th: p.name_th, price: Number(p.price) };
       });
+    // Items with option groups (size/toppings) open the picker client-side.
+    await attachOptionGroups(items);
     res.json({ reply, add: items });
   } catch (err) {
     console.error('[assistant]', err.message);
@@ -624,9 +720,14 @@ app.post('/api/checkout/session', async (req, res) => {
       shopSlug: slug,
       origin,
       lineItems: (await pool.query(
-        `SELECT name_snapshot AS name, price_snapshot, qty FROM order_items WHERE order_id = $1`,
+        `SELECT name_snapshot, price_snapshot, options_snapshot, options_total, qty
+         FROM order_items WHERE order_id = $1`,
         [order.orderId]
-      )).rows.map((r) => ({ name: r.name, amount_pence: Math.round(Number(r.price_snapshot) * 100), qty: r.qty })),
+      )).rows.map((r) => ({
+        name: itemLabel(r),
+        amount_pence: Math.round((Number(r.price_snapshot) + Number(r.options_total || 0)) * 100),
+        qty: r.qty,
+      })),
       deliveryFeePence: Math.round(order.deliveryFee * 100),
       customerEmail: req.body?.customer?.email,
     });
@@ -670,7 +771,8 @@ app.post('/api/orders', async (req, res) => {
         if (!email) return;
         const { rows: shopRows } = await pool.query(`SELECT name FROM shops WHERE id = $1`, [shopId]);
         const { rows: items } = await pool.query(
-          `SELECT name_snapshot, qty, line_total FROM order_items WHERE order_id = $1`, [order.orderId]
+          `SELECT name_snapshot, qty, line_total, options_snapshot FROM order_items WHERE order_id = $1`,
+          [order.orderId]
         );
         await emailService.sendBankTransferInstructions(
           email,
@@ -737,7 +839,8 @@ app.get('/api/orders/:id', lookupLimiter, async (req, res) => {
 
     delete order.customer_email; // never expose the email in the response
     const { rows: items } = await pool.query(
-      `SELECT name_snapshot, qty, line_total FROM order_items WHERE order_id = $1`,
+      `SELECT name_snapshot, price_snapshot, qty, line_total, options_snapshot, options_total
+       FROM order_items WHERE order_id = $1`,
       [order.id]
     );
     const carrier_tracking_url = carriers.trackingUrl(order.carrier, order.tracking_number);
@@ -869,7 +972,7 @@ app.get('/api/products', async (req, res) => {
 
     const params = [shopId];
     let sql = `SELECT p.id, p.name, p.name_th, p.description, p.description_th, p.price,
-                      p.stock_qty, p.track_stock, p.image_url, p.weight_grams,
+                      p.stock_qty, p.track_stock, p.kind, p.image_url, p.weight_grams,
                       p.category_id, c.name AS category, c.name_th AS category_th
                FROM products p
                LEFT JOIN categories c ON c.id = p.category_id
@@ -884,7 +987,7 @@ app.get('/api/products', async (req, res) => {
     }
     sql += ` ORDER BY c.sort_order NULLS LAST, p.sort_order, p.name`;
     const { rows } = await pool.query(sql, params);
-    res.json(rows);
+    res.json(await attachOptionGroups(rows));
   } catch (err) {
     console.error('[products]', err.message);
     res.status(500).json({ error: 'Failed to load products' });
@@ -900,14 +1003,14 @@ app.get('/api/products/lookup', requireAuth, async (req, res) => {
     const code = String(req.query.barcode || req.query.code || '').trim();
     if (!code) return res.status(400).json({ error: 'barcode is required' });
     const { rows } = await pool.query(
-      `SELECT id, name, name_th, barcode, sku, unit, price, stock_qty
+      `SELECT id, name, name_th, barcode, sku, unit, price, stock_qty, track_stock, kind
        FROM products
        WHERE shop_id = $1 AND is_active = TRUE AND (barcode = $2 OR sku = $2)
        LIMIT 1`,
       [shopId, code]
     );
     if (!rows[0]) return res.status(404).json({ error: 'No product with that barcode' });
-    res.json(rows[0]);
+    res.json((await attachOptionGroups(rows))[0]);
   } catch (err) {
     console.error('[products/lookup]', err.message);
     res.status(500).json({ error: 'Lookup failed' });
@@ -919,13 +1022,14 @@ app.get('/api/products/:id', async (req, res) => {
     const shopId = await resolveShopId(req);
     if (!shopId) return res.status(404).json({ error: 'Shop not found' });
     const { rows } = await pool.query(
-      `SELECT id, name, name_th, description, price, stock_qty, category, image_url
-       FROM products
-       WHERE id = $1 AND shop_id = $2 AND is_active = TRUE`,
+      `SELECT p.id, p.name, p.name_th, p.description, p.description_th, p.price, p.stock_qty,
+              p.track_stock, p.kind, p.image_url, p.category_id, c.name AS category, c.name_th AS category_th
+       FROM products p LEFT JOIN categories c ON c.id = p.category_id
+       WHERE p.id = $1 AND p.shop_id = $2 AND p.is_active = TRUE`,
       [req.params.id, shopId]
     );
     if (!rows[0]) return res.status(404).json({ error: 'Product not found' });
-    res.json(rows[0]);
+    res.json((await attachOptionGroups(rows))[0]);
   } catch (err) {
     console.error('[product]', err.message);
     res.status(500).json({ error: 'Failed to load product' });
@@ -1018,14 +1122,14 @@ app.get('/api/admin/products', requireAuth, async (req, res) => {
     if (!shopId) return res.status(404).json({ error: 'Shop not found' });
     const { rows } = await pool.query(
       `SELECT p.id, p.name, p.name_th, p.description, p.description_th, p.barcode, p.sku, p.unit,
-              p.price, p.cost_price, p.stock_qty, p.track_stock, p.weight_grams, p.sort_order,
+              p.price, p.cost_price, p.stock_qty, p.track_stock, p.kind, p.weight_grams, p.sort_order,
               p.category_id, c.name AS category, p.image_url, p.is_active, p.created_at
        FROM products p
        LEFT JOIN categories c ON c.id = p.category_id
        WHERE p.shop_id = $1 ORDER BY p.created_at DESC`,
       [shopId]
     );
-    res.json(rows);
+    res.json(await attachOptionGroups(rows));
   } catch (err) {
     console.error('[admin/products]', err.message);
     res.status(500).json({ error: 'Failed to load products' });
@@ -1037,13 +1141,13 @@ app.post('/api/admin/products', requireAuth, async (req, res) => {
     const shopId = await resolveShopId(req);
     if (!shopId) return res.status(404).json({ error: 'Shop not found' });
     const { name, name_th, description, description_th, barcode, sku, unit, price, cost_price,
-            stock_qty, track_stock, weight_grams, sort_order, category_id, image_url, is_active } = req.body || {};
+            stock_qty, track_stock, weight_grams, sort_order, category_id, image_url, is_active, kind } = req.body || {};
     if (!name || !String(name).trim()) return res.status(400).json({ error: 'Name is required' });
     const { rows } = await pool.query(
       `INSERT INTO products (shop_id, name, name_th, description, description_th, barcode, sku, unit,
                              price, cost_price, stock_qty, track_stock, weight_grams, sort_order,
-                             category_id, image_url, is_active)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+                             category_id, image_url, is_active, kind)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
        RETURNING *`,
       [
         shopId,
@@ -1063,6 +1167,7 @@ app.post('/api/admin/products', requireAuth, async (req, res) => {
         category_id || null,
         image_url || null,
         is_active !== false,
+        productKind(kind),
       ]
     );
     res.status(201).json(rows[0]);
@@ -1078,7 +1183,7 @@ app.put('/api/admin/products/:id', requireAuth, async (req, res) => {
     const shopId = await resolveShopId(req);
     if (!shopId) return res.status(404).json({ error: 'Shop not found' });
     const { name, name_th, description, description_th, barcode, sku, unit, price, cost_price,
-            stock_qty, track_stock, weight_grams, sort_order, category_id, image_url, is_active } = req.body || {};
+            stock_qty, track_stock, weight_grams, sort_order, category_id, image_url, is_active, kind } = req.body || {};
     const { rows } = await pool.query(
       `UPDATE products SET
          name = COALESCE($3, name),
@@ -1096,7 +1201,8 @@ app.put('/api/admin/products/:id', requireAuth, async (req, res) => {
          sort_order = COALESCE($15, sort_order),
          category_id = $16,
          image_url = $17,
-         is_active = COALESCE($18, is_active)
+         is_active = COALESCE($18, is_active),
+         kind = COALESCE($19, kind)
        WHERE id = $1 AND shop_id = $2
        RETURNING *`,
       [
@@ -1118,6 +1224,7 @@ app.put('/api/admin/products/:id', requireAuth, async (req, res) => {
         category_id || null,
         image_url ?? null,
         is_active != null ? Boolean(is_active) : null,
+        kind != null ? productKind(kind) : null,
       ]
     );
     if (!rows[0]) return res.status(404).json({ error: 'Product not found' });
@@ -1126,6 +1233,69 @@ app.put('/api/admin/products/:id', requireAuth, async (req, res) => {
     if (err.code === '23505') return res.status(409).json({ error: 'That barcode is already used by another product' });
     console.error('[admin/products PUT]', err.message);
     res.status(500).json({ error: 'Failed to update product' });
+  }
+});
+
+// Replace a product's whole option tree in one transaction (SIAMSHOP-501).
+// Body: { groups: [{ name, name_th, min_select, max_select, options: [{ name, name_th, price_delta, is_default }] }] }
+// The tree is small, so replace-all is simpler and safer than diffing. Past
+// orders are unaffected — they carry their own options_snapshot.
+app.put('/api/admin/products/:id/options', requireAuth, async (req, res) => {
+  const shopId = await resolveShopId(req);
+  if (!shopId) return res.status(404).json({ error: 'Shop not found' });
+  const groups = Array.isArray(req.body?.groups) ? req.body.groups : [];
+  const client = await pool.connect();
+  try {
+    // Validate before touching the DB.
+    const clean = groups.map((g, gi) => {
+      const name = String(g?.name || '').trim();
+      if (!name) throw httpError(400, `Option group ${gi + 1} needs a name`);
+      const options = (Array.isArray(g.options) ? g.options : [])
+        .map((o, oi) => {
+          const oname = String(o?.name || '').trim();
+          if (!oname) throw httpError(400, `"${name}": choice ${oi + 1} needs a name`);
+          const delta = Number(o.price_delta) || 0;
+          if (delta < -1000 || delta > 1000) throw httpError(400, `"${name}": price change out of range`);
+          return { name: oname, name_th: o.name_th ? String(o.name_th).trim() : null, price_delta: +delta.toFixed(2), is_default: Boolean(o.is_default), sort_order: oi };
+        });
+      if (options.length === 0) throw httpError(400, `"${name}" needs at least one choice`);
+      const min = Math.max(0, Math.floor(Number(g.min_select) || 0));
+      const max = Math.max(1, Math.floor(Number(g.max_select) || 1));
+      if (min > max) throw httpError(400, `"${name}": minimum can't exceed maximum`);
+      if (min > options.length) throw httpError(400, `"${name}": minimum exceeds the number of choices`);
+      return { name, name_th: g.name_th ? String(g.name_th).trim() : null, min_select: min, max_select: max, sort_order: gi, options };
+    });
+
+    await client.query('BEGIN');
+    const { rows: prod } = await client.query(
+      `SELECT id FROM products WHERE id = $1 AND shop_id = $2 FOR UPDATE`, [req.params.id, shopId]
+    );
+    if (!prod[0]) throw httpError(404, 'Product not found');
+    await client.query(`DELETE FROM product_option_groups WHERE product_id = $1 AND shop_id = $2`, [prod[0].id, shopId]);
+    for (const g of clean) {
+      const { rows: [grp] } = await client.query(
+        `INSERT INTO product_option_groups (shop_id, product_id, name, name_th, min_select, max_select, sort_order)
+         VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
+        [shopId, prod[0].id, g.name, g.name_th, g.min_select, g.max_select, g.sort_order]
+      );
+      for (const o of g.options) {
+        await client.query(
+          `INSERT INTO product_options (group_id, name, name_th, price_delta, is_default, sort_order)
+           VALUES ($1,$2,$3,$4,$5,$6)`,
+          [grp.id, o.name, o.name_th, o.price_delta, o.is_default, o.sort_order]
+        );
+      }
+    }
+    await client.query('COMMIT');
+    const [out] = await attachOptionGroups([{ id: prod[0].id }]);
+    res.json({ id: out.id, option_groups: out.option_groups });
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    if (err.httpStatus) return res.status(err.httpStatus).json({ error: err.message });
+    console.error('[admin/products options PUT]', err.message);
+    res.status(500).json({ error: 'Failed to save options' });
+  } finally {
+    client.release();
   }
 });
 
@@ -1293,22 +1463,27 @@ app.post('/api/sales', requireAuth, async (req, res) => {
     await client.query('BEGIN');
 
     // Lock each product row, validate stock, compute the authoritative total.
+    // Stock only matters for tracked items — made-to-order food (SIAMSHOP-502)
+    // sells at any stock level and never writes a movement.
     let subtotal = 0;
     const lines = [];
     for (const it of items) {
       const qty = Number(it.qty);
       if (!Number.isInteger(qty) || qty <= 0) throw httpError(400, 'Invalid quantity');
       const { rows } = await client.query(
-        `SELECT id, name, price, stock_qty FROM products
+        `SELECT id, name, price, stock_qty, track_stock FROM products
          WHERE id = $1 AND shop_id = $2 AND is_active = TRUE FOR UPDATE`,
         [it.product_id, shopId]
       );
       const p = rows[0];
       if (!p) throw httpError(404, `Product ${it.product_id} not found`);
-      if (p.stock_qty < qty) throw httpError(409, `Not enough stock for ${p.name} (${p.stock_qty} left)`);
-      const lineTotal = Number(p.price) * qty;
+      if (p.track_stock && p.stock_qty < qty) {
+        throw httpError(409, `Not enough stock for ${p.name} (${p.stock_qty} left)`);
+      }
+      const { snapshot, total: optionsTotal } = await resolveOptions(client, p, it.option_ids);
+      const lineTotal = +((Number(p.price) + optionsTotal) * qty).toFixed(2);
       subtotal += lineTotal;
-      lines.push({ product: p, qty, lineTotal });
+      lines.push({ product: p, qty, lineTotal, snapshot, optionsTotal });
     }
 
     const total = subtotal; // no delivery fee in-store
@@ -1329,10 +1504,13 @@ app.post('/api/sales', requireAuth, async (req, res) => {
 
     for (const ln of lines) {
       await client.query(
-        `INSERT INTO order_items (order_id, product_id, name_snapshot, price_snapshot, qty, line_total)
-         VALUES ($1,$2,$3,$4,$5,$6)`,
-        [orderId, ln.product.id, ln.product.name, ln.product.price, ln.qty, ln.lineTotal]
+        `INSERT INTO order_items (order_id, product_id, name_snapshot, price_snapshot, qty, line_total,
+                                  options_snapshot, options_total)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+        [orderId, ln.product.id, ln.product.name, ln.product.price, ln.qty, ln.lineTotal,
+         ln.snapshot ? JSON.stringify(ln.snapshot) : null, ln.optionsTotal]
       );
+      if (!ln.product.track_stock) continue;
       await client.query(
         `UPDATE products SET stock_qty = stock_qty - $1 WHERE id = $2`,
         [ln.qty, ln.product.id]
@@ -1354,7 +1532,10 @@ app.post('/api/sales', requireAuth, async (req, res) => {
       amount_tendered: tendered,
       change_given: change,
       created_at: orderRes.rows[0].created_at,
-      items: lines.map((l) => ({ name: l.product.name, qty: l.qty, line_total: l.lineTotal })),
+      items: lines.map((l) => ({
+        name: l.product.name, qty: l.qty, line_total: l.lineTotal,
+        options: l.snapshot || [], options_total: l.optionsTotal,
+      })),
     });
   } catch (err) {
     await client.query('ROLLBACK');
@@ -1689,7 +1870,8 @@ app.get('/api/admin/orders/:id', requireAuth, async (req, res) => {
     );
     if (!rows[0]) return res.status(404).json({ error: 'Order not found' });
     const { rows: items } = await pool.query(
-      `SELECT name_snapshot, price_snapshot, qty, line_total FROM order_items WHERE order_id = $1`,
+      `SELECT name_snapshot, price_snapshot, qty, line_total, options_snapshot, options_total
+       FROM order_items WHERE order_id = $1`,
       [req.params.id]
     );
     res.json({ ...rows[0], items });
@@ -1757,15 +1939,18 @@ app.post('/api/admin/orders/:id/cancel', requireAuth, async (req, res) => {
     if (!order) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'Order not found' }); }
     if (order.status === 'cancelled') { await client.query('ROLLBACK'); return res.json(order); }
 
-    // If it was paid, the stock was decremented — put it back.
+    // If it was paid, the stock was decremented — put it back (tracked items only;
+    // made-to-order lines never moved stock, so they get no refund movement).
     if (order.payment_status === 'paid') {
       const { rows: items } = await client.query(
-        `SELECT product_id, qty FROM order_items WHERE order_id = $1`, [order.id]
+        `SELECT oi.product_id, oi.qty, p.track_stock
+         FROM order_items oi LEFT JOIN products p ON p.id = oi.product_id
+         WHERE oi.order_id = $1`, [order.id]
       );
       for (const it of items) {
-        if (!it.product_id) continue;
+        if (!it.product_id || !it.track_stock) continue;
         await client.query(
-          `UPDATE products SET stock_qty = stock_qty + $1 WHERE id = $2 AND track_stock = TRUE`,
+          `UPDATE products SET stock_qty = stock_qty + $1 WHERE id = $2`,
           [it.qty, it.product_id]
         );
         await client.query(

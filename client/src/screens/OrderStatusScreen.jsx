@@ -82,8 +82,13 @@ function OrderResult({ order }) {
           <tbody>
             {(order.items || []).map((it, i) => (
               <tr key={i}>
-                <td>{it.name_snapshot} × {it.qty}</td>
-                <td style={{ textAlign: 'right' }}>{money(it.line_total)}</td>
+                <td>
+                  {it.name_snapshot} × {it.qty}
+                  {Array.isArray(it.options_snapshot) && it.options_snapshot.length > 0 && (
+                    <div className="line-opts">{it.options_snapshot.map((o) => o.name).join(', ')}</div>
+                  )}
+                </td>
+                <td style={{ textAlign: 'right', verticalAlign: 'top' }}>{money(it.line_total)}</td>
               </tr>
             ))}
             <tr><td>Subtotal</td><td style={{ textAlign: 'right' }}>{money(order.subtotal)}</td></tr>

@@ -214,6 +214,43 @@ async function initDB() {
       )
     `);
 
+    // SIAMSHOP-501 — product options (size / toppings / add-ons). A group is a
+    // question ("Size", "Toppings"); options are the answers, each with a price
+    // delta on top of products.price. Cascade with the product; orders keep a
+    // JSON snapshot so history survives edits/deletes.
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS product_option_groups (
+        id          SERIAL PRIMARY KEY,
+        shop_id     INTEGER NOT NULL REFERENCES shops(id) ON DELETE CASCADE,
+        product_id  INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+        name        VARCHAR(120) NOT NULL,
+        name_th     VARCHAR(120),
+        min_select  INTEGER NOT NULL DEFAULT 0,
+        max_select  INTEGER NOT NULL DEFAULT 1,
+        sort_order  INTEGER NOT NULL DEFAULT 0
+      )
+    `);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS product_options (
+        id           SERIAL PRIMARY KEY,
+        group_id     INTEGER NOT NULL REFERENCES product_option_groups(id) ON DELETE CASCADE,
+        name         VARCHAR(120) NOT NULL,
+        name_th      VARCHAR(120),
+        price_delta  NUMERIC(10,2) NOT NULL DEFAULT 0,
+        is_default   BOOLEAN NOT NULL DEFAULT FALSE,
+        is_active    BOOLEAN NOT NULL DEFAULT TRUE,
+        sort_order   INTEGER NOT NULL DEFAULT 0
+      )
+    `);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_option_groups_product ON product_option_groups(product_id, sort_order)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_options_group ON product_options(group_id, sort_order)`);
+    // order_items: chosen options (snapshot) + their per-unit total.
+    // line_total = (price_snapshot + options_total) * qty.
+    await pool.query(`ALTER TABLE order_items ADD COLUMN IF NOT EXISTS options_snapshot JSONB`);
+    await pool.query(`ALTER TABLE order_items ADD COLUMN IF NOT EXISTS options_total NUMERIC(10,2) NOT NULL DEFAULT 0`);
+    // SIAMSHOP-502 — retail (shelf stock) vs food (made to order at the counter).
+    await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS kind VARCHAR(20) NOT NULL DEFAULT 'retail'`);
+
     // Helpful indexes for the hot paths.
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_products_shop ON products(shop_id, is_active)`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_orders_shop ON orders(shop_id, created_at DESC)`);

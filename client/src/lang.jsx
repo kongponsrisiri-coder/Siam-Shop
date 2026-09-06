@@ -83,6 +83,9 @@ const STRINGS = {
     addMore: 'Add',
     moreToCheckout: 'more to check out',
     deliveryAtCheckout: 'Delivery calculated at checkout',
+    chooseOptions: 'Choose options',
+    chooseOptionsFor: 'Please choose options for',
+    madeToOrder: 'Made to order',
   },
   th: {
     shop: 'ร้านค้า',
@@ -109,6 +112,9 @@ const STRINGS = {
     addMore: 'เพิ่มอีก',
     moreToCheckout: 'เพื่อชำระเงิน',
     deliveryAtCheckout: 'คำนวณค่าจัดส่งตอนชำระเงิน',
+    chooseOptions: 'เลือกตัวเลือก',
+    chooseOptionsFor: 'กรุณาเลือกตัวเลือกสำหรับ',
+    madeToOrder: 'ทำสดตามสั่ง',
   },
 };
 

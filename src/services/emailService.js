@@ -72,13 +72,20 @@ function money(n) {
   return '£' + Number(n || 0).toFixed(2);
 }
 
+// Chosen options (size / toppings / add-ons) shown under the item name.
+function optionsLine(snapshot) {
+  const list = Array.isArray(snapshot) ? snapshot : [];
+  if (!list.length) return '';
+  return `<div style="font-size:12px;color:#6b7280;">${esc(list.map((o) => o.name).join(', '))}</div>`;
+}
+
 function itemsTable(items) {
   const rows = (items || [])
     .map(
       (it) => `
       <tr>
-        <td style="padding:6px 0;">${esc(it.name_snapshot || it.name)} × ${Number(it.qty)}</td>
-        <td style="padding:6px 0;text-align:right;">${money(it.line_total)}</td>
+        <td style="padding:6px 0;">${esc(it.name_snapshot || it.name)} × ${Number(it.qty)}${optionsLine(it.options_snapshot || it.options)}</td>
+        <td style="padding:6px 0;text-align:right;vertical-align:top;">${money(it.line_total)}</td>
       </tr>`
     )
     .join('');

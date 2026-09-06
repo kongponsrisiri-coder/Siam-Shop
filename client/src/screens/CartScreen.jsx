@@ -1,15 +1,20 @@
 import React, { useEffect, useState } from 'react';
 import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useCart } from '../cart.jsx';
-import { useT } from '../lang.jsx';
+import { useLang, useT } from '../lang.jsx';
 import { api } from '../api.js';
+import { defaultSelection, hasOptions, optionsLabel, selectionValid } from '../options.js';
 
 export default function CartScreen() {
   const { items, add, setQty, remove, subtotal } = useCart();
   const navigate = useNavigate();
   const t = useT();
+  const { lang } = useLang();
   const [minOrder, setMinOrder] = useState(0);
   const [params, setParams] = useSearchParams();
+  // Messenger pre-fill: items that need a size/topping choice can't be added
+  // blind — list them with a link to the product page instead.
+  const [needChoice, setNeedChoice] = useState([]);
 
   useEffect(() => {
     let live = true;
@@ -37,7 +42,16 @@ export default function CartScreen() {
         api.getProduct(w.id).then((p) => ({ p, qty: Math.max(1, Number(w.qty) || 1) })).catch(() => null)
       )
     ).then((results) => {
-      results.filter(Boolean).forEach(({ p, qty }) => add(p, qty));
+      const pending = [];
+      results.filter(Boolean).forEach(({ p, qty }) => {
+        if (hasOptions(p)) {
+          const ids = defaultSelection(p);
+          if (!selectionValid(p, ids)) return pending.push(p);
+          return add(p, qty, ids);
+        }
+        add(p, qty);
+      });
+      setNeedChoice(pending);
       // Clear the param so a refresh doesn't re-add.
       params.delete('cart');
       params.delete('src');
@@ -46,9 +60,22 @@ export default function CartScreen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const choiceNotice = needChoice.length > 0 && (
+    <div className="min-warn" style={{ marginBottom: 12 }}>
+      {t('chooseOptionsFor')}:{' '}
+      {needChoice.map((p, i) => (
+        <span key={p.id}>
+          {i > 0 && ', '}
+          <Link to={`/product/${p.id}`}><strong>{lang === 'th' && p.name_th ? p.name_th : p.name}</strong></Link>
+        </span>
+      ))}
+    </div>
+  );
+
   if (items.length === 0) {
     return (
       <div className="container center">
+        {choiceNotice}
         <p className="muted">Your cart is empty.</p>
         <Link className="btn" to="/">{t('keepShopping')}</Link>
       </div>
@@ -61,6 +88,7 @@ export default function CartScreen() {
   return (
     <div className="container">
       <h1>{t('cart')}</h1>
+      {choiceNotice}
       <div className="panel">
         <table>
           <thead>
@@ -74,21 +102,24 @@ export default function CartScreen() {
           </thead>
           <tbody>
             {items.map((i) => (
-              <tr key={i.id}>
-                <td>{i.name}</td>
+              <tr key={i.key}>
+                <td>
+                  {lang === 'th' && i.name_th ? i.name_th : i.name}
+                  {i.options?.length > 0 && <div className="line-opts">{optionsLabel(i.options, lang)}</div>}
+                </td>
                 <td>£{i.price.toFixed(2)}</td>
                 <td>
                   <input
                     type="number"
                     min="1"
                     value={i.qty}
-                    onChange={(e) => setQty(i.id, Number(e.target.value))}
+                    onChange={(e) => setQty(i.key, Number(e.target.value))}
                     style={{ width: 70 }}
                   />
                 </td>
                 <td>£{(i.price * i.qty).toFixed(2)}</td>
                 <td>
-                  <button className="btn ghost" onClick={() => remove(i.id)}>Remove</button>
+                  <button className="btn ghost" onClick={() => remove(i.key)}>Remove</button>
                 </td>
               </tr>
             ))}

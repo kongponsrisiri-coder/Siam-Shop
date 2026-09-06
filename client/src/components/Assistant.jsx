@@ -2,6 +2,8 @@ import React, { useState, useRef, useEffect } from 'react';
 import { api } from '../api.js';
 import { useCart } from '../cart.jsx';
 import { useLang } from '../lang.jsx';
+import OptionPicker from './OptionPicker.jsx';
+import { hasOptions } from '../options.js';
 
 // Bilingual AI shopping assistant — floating chat widget (SIAMSHOP-THAITANA-001 #2).
 export default function Assistant() {
@@ -14,6 +16,7 @@ export default function Assistant() {
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
+  const [picking, setPicking] = useState(null); // suggestion needing size/toppings
   const bodyRef = useRef(null);
 
   const t = {
@@ -55,11 +58,16 @@ export default function Assistant() {
   }
 
   function addItem(s) {
-    add({ id: s.product_id, name: s.name, name_th: s.name_th, price: s.price }, s.qty || 1);
+    const product = { id: s.product_id, name: s.name, name_th: s.name_th, price: s.price, option_groups: s.option_groups };
+    // Size / toppings must be chosen by the customer — open the picker.
+    if (hasOptions(product)) return setPicking({ product, qty: s.qty || 1 });
+    add(product, s.qty || 1);
   }
   function addAll() {
-    suggestions.forEach(addItem);
-    setSuggestions([]);
+    // Plain items go straight in; items with options stay listed to choose.
+    const plain = suggestions.filter((s) => !hasOptions(s));
+    plain.forEach(addItem);
+    setSuggestions(suggestions.filter((s) => hasOptions(s)));
   }
 
   if (!open) {
@@ -73,6 +81,18 @@ export default function Assistant() {
 
   return (
     <div className="assistant-panel">
+      {picking && (
+        <OptionPicker
+          product={picking.product}
+          lang={lang}
+          onClose={() => setPicking(null)}
+          onConfirm={(ids) => {
+            add(picking.product, picking.qty, ids);
+            setSuggestions((list) => list.filter((s) => s.product_id !== picking.product.id));
+            setPicking(null);
+          }}
+        />
+      )}
       <div className="assistant-head">
         <strong>{t.title}</strong>
         <button className="assistant-x" onClick={() => setOpen(false)} aria-label="Close">×</button>

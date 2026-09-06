@@ -2,10 +2,16 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api, auth } from '../api.js';
 import { Logo } from '../components/Logo.jsx';
+import OptionPicker from '../components/OptionPicker.jsx';
+import { describeSelection, hasOptions, lineKey, unitPrice } from '../options.js';
 
 // In-store EPOS till (SIAMSHOP-103). Staff scan a barcode or search by name to
 // build a basket, take cash or card, and complete the sale — which decrements
 // the shared stock server-side. Works on a tablet, desktop, or phone.
+//
+// SIAMSHOP-501/502: products with option groups (size / toppings) open a picker
+// before they join the basket; a basket line = product + chosen options. Made-
+// to-order items (track_stock off) sell at any stock level.
 
 function money(n) {
   return '£' + Number(n || 0).toFixed(2);
@@ -50,7 +56,9 @@ export default function TillScreen() {
   const [catalogue, setCatalogue] = useState([]);
   const [categories, setCategories] = useState([]);
   const [categoryId, setCategoryId] = useState(''); // '' = all
-  const [basket, setBasket] = useState([]); // {id, name, price, qty, stock_qty}
+  // basket line: {key, id, name, price (unit incl. options), qty, stock_qty, track_stock, option_ids, options}
+  const [basket, setBasket] = useState([]);
+  const [picking, setPicking] = useState(null); // product awaiting option choice
   const [search, setSearch] = useState('');
   const [payment, setPayment] = useState('cash');
   const [tendered, setTendered] = useState('');
@@ -75,7 +83,7 @@ export default function TillScreen() {
         api.adminListProducts(),
         api.getCategories().catch(() => []),
       ]);
-      setCatalogue(prods);
+      setCatalogue(prods.filter((p) => p.is_active !== false));
       setCategories(cats || []);
     } catch {
       /* ignore */
@@ -106,26 +114,51 @@ export default function TillScreen() {
     setTimeout(() => setFlash(null), 2500);
   }
 
+  const tracked = (p) => p.track_stock !== false;
+  const soldOut = (p) => tracked(p) && Number(p.stock_qty) <= 0;
+
+  // Tap / scan entry point: products with options go via the picker first.
   function addProduct(p) {
-    if (p.stock_qty <= 0) return showFlash('err', `${p.name} is out of stock`);
-    setBasket((prev) => {
-      const found = prev.find((i) => i.id === p.id);
-      if (found) {
-        if (found.qty >= p.stock_qty) {
-          showFlash('err', `Only ${p.stock_qty} of ${p.name} in stock`);
-          return prev;
-        }
-        return prev.map((i) => (i.id === p.id ? { ...i, qty: i.qty + 1 } : i));
-      }
-      return [...prev, { id: p.id, name: p.name, price: Number(p.price), qty: 1, stock_qty: p.stock_qty }];
-    });
+    if (soldOut(p)) return showFlash('err', `${p.name} is out of stock`);
+    if (hasOptions(p)) return setPicking(p);
+    addLine(p, []);
   }
 
-  function setQty(id, qty) {
-    setBasket((prev) => prev.map((i) => (i.id === id ? { ...i, qty: Math.max(1, qty) } : i)));
+  function addLine(p, optionIds) {
+    const key = lineKey(p.id, optionIds);
+    setBasket((prev) => {
+      const found = prev.find((i) => i.key === key);
+      // Stock cap applies across all builds of the same tracked product.
+      const already = prev.filter((i) => i.id === p.id).reduce((s, i) => s + i.qty, 0);
+      if (tracked(p) && already >= Number(p.stock_qty)) {
+        showFlash('err', `Only ${p.stock_qty} of ${p.name} in stock`);
+        return prev;
+      }
+      if (found) return prev.map((i) => (i.key === key ? { ...i, qty: i.qty + 1 } : i));
+      return [
+        ...prev,
+        {
+          key,
+          id: p.id,
+          name: p.name,
+          price: unitPrice(p, optionIds),
+          qty: 1,
+          stock_qty: p.stock_qty,
+          track_stock: tracked(p),
+          option_ids: optionIds,
+          options: describeSelection(p, optionIds),
+        },
+      ];
+    });
+    setPicking(null);
+    showFlash('ok', `Added ${p.name}`);
   }
-  function removeLine(id) {
-    setBasket((prev) => prev.filter((i) => i.id !== id));
+
+  function setQty(key, qty) {
+    setBasket((prev) => prev.map((i) => (i.key === key ? { ...i, qty: Math.max(1, qty) } : i)));
+  }
+  function removeLine(key) {
+    setBasket((prev) => prev.filter((i) => i.key !== key));
   }
 
   // Scan box: on Enter, try an exact barcode lookup; if no match, leave the text
@@ -138,7 +171,6 @@ export default function TillScreen() {
       const p = await api.lookupBarcode(code);
       addProduct(p);
       setSearch('');
-      showFlash('ok', `Added ${p.name}`);
     } catch {
       // not a barcode — keep as a search term; if exactly one match, add it
       const matches = filtered;
@@ -169,7 +201,7 @@ export default function TillScreen() {
     setBusy(true);
     try {
       const sale = await api.createSale({
-        items: basket.map((i) => ({ product_id: i.id, qty: i.qty })),
+        items: basket.map((i) => ({ product_id: i.id, qty: i.qty, option_ids: i.option_ids })),
         payment_method: payment,
         amount_tendered: payment === 'cash' && tendered !== '' ? Number(tendered) : undefined,
       });
@@ -235,14 +267,18 @@ export default function TillScreen() {
               <button
                 key={p.id}
                 className="till-product"
-                disabled={p.stock_qty <= 0}
+                disabled={soldOut(p)}
                 onClick={() => addProduct(p)}
               >
                 <div className="till-product-name">{p.name}</div>
                 {p.name_th && <div className="muted" style={{ fontSize: 12 }}>{p.name_th}</div>}
                 <div className="till-product-foot">
-                  <span className="price">{money(p.price)}</span>
-                  <span className={`muted ${p.stock_qty <= 0 ? 'err' : ''}`}>{p.stock_qty} in stock</span>
+                  <span className="price">{hasOptions(p) ? 'from ' : ''}{money(p.price)}</span>
+                  {tracked(p) ? (
+                    <span className={`muted ${soldOut(p) ? 'err' : ''}`}>{p.stock_qty} in stock</span>
+                  ) : (
+                    <span className="tag kind-food">{p.kind === 'food' ? 'made to order' : 'no stock count'}</span>
+                  )}
                 </div>
               </button>
             ))}
@@ -258,18 +294,21 @@ export default function TillScreen() {
           ) : (
             <div className="till-lines">
               {basket.map((i) => (
-                <div className="till-line" key={i.id}>
+                <div className="till-line" key={i.key}>
                   <div style={{ flex: 1 }}>
                     <div>{i.name}</div>
+                    {i.options.length > 0 && (
+                      <div className="line-opts">{i.options.map((o) => o.name).join(', ')}</div>
+                    )}
                     <div className="muted" style={{ fontSize: 12 }}>{money(i.price)} each</div>
                   </div>
                   <div className="till-qty">
-                    <button onClick={() => setQty(i.id, i.qty - 1)}>−</button>
+                    <button onClick={() => setQty(i.key, i.qty - 1)}>−</button>
                     <span>{i.qty}</span>
-                    <button onClick={() => setQty(i.id, i.qty + 1)}>+</button>
+                    <button onClick={() => setQty(i.key, i.qty + 1)}>+</button>
                   </div>
                   <div style={{ width: 64, textAlign: 'right' }}>{money(i.price * i.qty)}</div>
-                  <button className="till-x" onClick={() => removeLine(i.id)}>×</button>
+                  <button className="till-x" onClick={() => removeLine(i.key)}>×</button>
                 </div>
               ))}
             </div>
@@ -312,14 +351,27 @@ export default function TillScreen() {
         </div>
       </div>
 
+      {/* Option picker (size / toppings / add-ons) */}
+      {picking && (
+        <OptionPicker
+          product={picking}
+          onClose={() => { setPicking(null); scanRef.current?.focus(); }}
+          onConfirm={(ids) => { addLine(picking, ids); scanRef.current?.focus(); }}
+          confirmLabel="Add to sale"
+        />
+      )}
+
       {/* Receipt modal */}
       {receipt && (
         <div className="till-modal" onClick={() => setReceipt(null)}>
           <div className="till-receipt" onClick={(e) => e.stopPropagation()}>
             <h2 style={{ marginTop: 0 }}>✅ Sale #{receipt.id}</h2>
             {receipt.items.map((it, idx) => (
-              <div className="row" key={idx} style={{ justifyContent: 'space-between' }}>
-                <span>{it.name} × {it.qty}</span>
+              <div className="row" key={idx} style={{ justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                <span>
+                  {it.name} × {it.qty}
+                  {it.options?.length > 0 && <div className="line-opts">{it.options.map((o) => o.name).join(', ')}</div>}
+                </span>
                 <span>{money(it.line_total)}</span>
               </div>
             ))}

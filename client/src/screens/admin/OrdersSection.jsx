@@ -134,7 +134,12 @@ function OrderDetail({ id, onBack, onChanged }) {
           <tbody>
             {items.map((it, idx) => (
               <tr key={idx}>
-                <td>{it.name_snapshot}</td>
+                <td>
+                  {it.name_snapshot}
+                  {Array.isArray(it.options_snapshot) && it.options_snapshot.length > 0 && (
+                    <div className="line-opts">{it.options_snapshot.map((o) => o.name).join(', ')}</div>
+                  )}
+                </td>
                 <td>{it.qty}</td>
                 <td style={{ textAlign: 'right' }}>£{Number(it.line_total).toFixed(2)}</td>
               </tr>

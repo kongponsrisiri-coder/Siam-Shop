@@ -3,6 +3,8 @@ import { Link } from 'react-router-dom';
 import { api } from '../api.js';
 import { useCart } from '../cart.jsx';
 import { useLang, useT, pickName } from '../lang.jsx';
+import OptionPicker from '../components/OptionPicker.jsx';
+import { hasOptions } from '../options.js';
 
 // Deterministic, on-brand gradient for products without a photo, so the
 // placeholder tiles look intentional and vary by category.
@@ -54,8 +56,33 @@ function NotifyMe({ productId }) {
 // Inline quantity stepper that adds directly to the cart from the card.
 function QtyStepper({ product }) {
   const t = useT();
+  const { lang } = useLang();
   const { items, add, setQty } = useCart();
-  const inCart = items.find((i) => i.id === product.id);
+  const [picking, setPicking] = useState(false);
+
+  // Products with size / toppings: every add goes through the picker, and the
+  // card shows how many builds of it are already in the cart.
+  if (hasOptions(product)) {
+    const n = items.filter((i) => i.id === product.id).reduce((s, i) => s + i.qty, 0);
+    return (
+      <>
+        <button className="btn add-btn" onClick={() => setPicking(true)}>
+          {t('chooseOptions')}{n > 0 ? ` · ${n} ${t('inCart')}` : ''}
+        </button>
+        {picking && (
+          <OptionPicker
+            product={product}
+            lang={lang}
+            onClose={() => setPicking(false)}
+            onConfirm={(ids) => { add(product, 1, ids); setPicking(false); }}
+          />
+        )}
+      </>
+    );
+  }
+
+  const key = String(product.id);
+  const inCart = items.find((i) => i.key === key);
   const qty = inCart ? inCart.qty : 0;
 
   if (qty <= 0) {
@@ -68,7 +95,7 @@ function QtyStepper({ product }) {
 
   return (
     <div className="qty-stepper">
-      <button type="button" onClick={() => setQty(product.id, qty - 1)} aria-label="decrease">−</button>
+      <button type="button" onClick={() => setQty(key, qty - 1)} aria-label="decrease">−</button>
       <span className="qty-val">
         {qty} <small>{t('inCart')}</small>
       </span>
@@ -200,7 +227,10 @@ export default function StorefrontScreen() {
                   {pickName(p, lang)}
                 </Link>
                 {lang !== 'th' && p.name_th && <div className="name-th">{p.name_th}</div>}
-                <div className="price">£{Number(p.price).toFixed(2)}</div>
+                <div className="price">
+                  {hasOptions(p) && <small className="muted" style={{ fontWeight: 400 }}>{lang === 'th' ? 'เริ่ม ' : 'from '}</small>}
+                  £{Number(p.price).toFixed(2)}
+                </div>
                 {out ? (
                   <NotifyMe productId={p.id} />
                 ) : (

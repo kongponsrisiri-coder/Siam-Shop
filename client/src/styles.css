@@ -427,3 +427,40 @@ th { color: var(--muted); font-weight: 600; }
 .studio-opt:last-child { border-bottom: 0; }
 .studio-opt:hover { background: #faf5ef; }
 .studio-opt-thumb { width: 30px; height: 30px; border-radius: 6px; object-fit: cover; flex: 0 0 auto; }
+
+/* ---- Product options (SIAMSHOP-501): picker sheet + inline groups ---- */
+.opt-modal { align-items: flex-end; }
+@media (min-width: 640px) { .opt-modal { align-items: center; } }
+.opt-sheet {
+  background: #fff; border-radius: 16px 16px 0 0; padding: 18px; width: 100%; max-width: 520px;
+  max-height: 90vh; overflow-y: auto; display: flex; flex-direction: column; gap: 12px;
+}
+@media (min-width: 640px) { .opt-sheet { border-radius: 14px; max-width: 480px; } }
+.opt-sheet-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.opt-sheet-foot { display: flex; gap: 8px; justify-content: flex-end; margin-top: 4px; }
+.opt-sheet-foot .btn { padding: 12px 18px; font-size: 15px; }
+.opt-groups { display: flex; flex-direction: column; gap: 14px; }
+.opt-group-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 6px; }
+.opt-hint { font-size: 12px; color: var(--muted); }
+.opt-hint.need { color: #b91c1c; font-weight: 600; }
+.opt-choices { display: grid; gap: 8px; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
+.opt-choice {
+  display: flex; justify-content: space-between; align-items: center; gap: 6px; text-align: left;
+  border: 1.5px solid var(--line); background: #fff; border-radius: 10px; padding: 12px 12px;
+  font-size: 14px; cursor: pointer; color: var(--ink); min-height: 46px;
+}
+.opt-choice:hover:not(:disabled) { border-color: var(--siam-gold); }
+.opt-choice.on { border-color: var(--siam-red); background: #fff1f3; font-weight: 600; }
+.opt-choice:disabled { opacity: 0.45; cursor: not-allowed; }
+.opt-delta { font-size: 12px; color: var(--muted); white-space: nowrap; }
+.opt-choice.on .opt-delta { color: var(--siam-red); }
+.line-opts { font-size: 12px; color: var(--muted); margin-top: 2px; }
+.kind-food { background: #fff7ed; color: #9a3412; }
+
+/* Admin options editor */
+.opt-editor { border: 1px solid var(--line); border-radius: 10px; padding: 12px; margin-top: 8px; background: #fafafa; }
+.opt-editor-group { background: #fff; border: 1px solid var(--line); border-radius: 8px; padding: 10px; margin-bottom: 10px; }
+.opt-editor-row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.opt-editor-row input { margin: 0; }
+.opt-editor-row .grow { flex: 1 1 140px; }
+.opt-editor-row .num { flex: 0 0 84px; }

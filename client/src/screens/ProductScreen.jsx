@@ -3,6 +3,8 @@ import { useParams, Link, useNavigate } from 'react-router-dom';
 import { api } from '../api.js';
 import { useCart } from '../cart.jsx';
 import { useLang, useT, pickName, pickDesc } from '../lang.jsx';
+import { OptionGroups } from '../components/OptionPicker.jsx';
+import { defaultSelection, hasOptions, selectionValid, unitPrice } from '../options.js';
 
 function NotifyMe({ productId }) {
   const t = useT();
@@ -51,6 +53,7 @@ export default function ProductScreen() {
   const [product, setProduct] = useState(null);
   const [error, setError] = useState('');
   const [qty, setQty] = useState(1);
+  const [optionIds, setOptionIds] = useState([]);
   const { add } = useCart();
   const navigate = useNavigate();
 
@@ -58,7 +61,11 @@ export default function ProductScreen() {
     let live = true;
     api
       .getProduct(id)
-      .then((p) => live && setProduct(p))
+      .then((p) => {
+        if (!live) return;
+        setProduct(p);
+        setOptionIds(defaultSelection(p));
+      })
       .catch((e) => live && setError(e.message));
     return () => {
       live = false;
@@ -71,6 +78,9 @@ export default function ProductScreen() {
   const out = product.track_stock && Number(product.stock_qty) <= 0;
   const name = pickName(product, lang);
   const desc = pickDesc(product, lang);
+  const withOptions = hasOptions(product);
+  const valid = !withOptions || selectionValid(product, optionIds);
+  const price = unitPrice(product, optionIds);
 
   return (
     <div className="container">
@@ -90,7 +100,12 @@ export default function ProductScreen() {
             <p className="muted" style={{ marginTop: -8 }}>{product.name_th}</p>
           )}
           <div style={{ fontSize: 26, fontWeight: 800, color: 'var(--siam-red)' }}>
-            £{Number(product.price).toFixed(2)}
+            £{price.toFixed(2)}
+            {withOptions && price !== Number(product.price) && (
+              <span className="muted" style={{ fontSize: 13, fontWeight: 400, marginLeft: 8 }}>
+                ({lang === 'th' ? 'ราคาเริ่มต้น' : 'from'} £{Number(product.price).toFixed(2)})
+              </span>
+            )}
           </div>
           <p>{desc || (lang === 'th' ? 'ยังไม่มีรายละเอียด' : 'No description yet.')}</p>
           <p className="muted">
@@ -98,8 +113,12 @@ export default function ProductScreen() {
               ? t('outOfStock')
               : product.track_stock
                 ? `${product.stock_qty} ${lang === 'th' ? 'ชิ้นในสต็อก' : 'in stock'}`
-                : ''}
+                : product.kind === 'food' ? t('madeToOrder') : ''}
           </p>
+
+          {withOptions && !out && (
+            <OptionGroups product={product} value={optionIds} onChange={setOptionIds} lang={lang} />
+          )}
 
           {out ? (
             <NotifyMe productId={product.id} />
@@ -114,12 +133,13 @@ export default function ProductScreen() {
               />
               <button
                 className="btn"
+                disabled={!valid}
                 onClick={() => {
-                  add(product, qty);
+                  add(product, qty, optionIds);
                   navigate('/cart');
                 }}
               >
-                {t('addToCart')}
+                {t('addToCart')} · £{(price * qty).toFixed(2)}
               </button>
             </div>
           )}

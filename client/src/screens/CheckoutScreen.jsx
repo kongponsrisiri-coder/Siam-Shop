@@ -42,8 +42,13 @@ function SuccessView() {
             <tbody>
               {(order.items || []).map((it, idx) => (
                 <tr key={idx}>
-                  <td>{it.name_snapshot} × {it.qty}</td>
-                  <td style={{ textAlign: 'right' }}>£{Number(it.line_total).toFixed(2)}</td>
+                  <td>
+                    {it.name_snapshot} × {it.qty}
+                    {Array.isArray(it.options_snapshot) && it.options_snapshot.length > 0 && (
+                      <div className="line-opts">{it.options_snapshot.map((o) => o.name).join(', ')}</div>
+                    )}
+                  </td>
+                  <td style={{ textAlign: 'right', verticalAlign: 'top' }}>£{Number(it.line_total).toFixed(2)}</td>
                 </tr>
               ))}
               <tr>
@@ -137,7 +142,7 @@ function CheckoutForm() {
 
   function buildBody() {
     return {
-      items: items.map((i) => ({ product_id: i.id, qty: i.qty })),
+      items: items.map((i) => ({ product_id: i.id, qty: i.qty, option_ids: i.option_ids || [] })),
       postcode: postcode.trim(),
       delivery_address: address.trim(),
       customer: { email: email.trim(), name: name.trim(), phone: phone.trim() },
@@ -270,9 +275,12 @@ function CheckoutForm() {
           <table>
             <tbody>
               {items.map((i) => (
-                <tr key={i.id}>
-                  <td>{i.name} × {i.qty}</td>
-                  <td style={{ textAlign: 'right' }}>£{(i.price * i.qty).toFixed(2)}</td>
+                <tr key={i.key}>
+                  <td>
+                    {i.name} × {i.qty}
+                    {i.options?.length > 0 && <div className="line-opts">{i.options.map((o) => o.name).join(', ')}</div>}
+                  </td>
+                  <td style={{ textAlign: 'right', verticalAlign: 'top' }}>£{(i.price * i.qty).toFixed(2)}</td>
                 </tr>
               ))}
               <tr>
