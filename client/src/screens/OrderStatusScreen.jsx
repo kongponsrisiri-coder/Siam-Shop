@@ -12,6 +12,8 @@ function statusOf(o) {
   if (o.payment_status === 'refunded') return { label: 'Refunded', cls: 'off' };
   if (o.payment_status !== 'paid') return { label: 'Awaiting payment', cls: 'off' };
   if (o.status === 'dispatched') return { label: 'Dispatched 📦', cls: 'ok' };
+  if (o.status === 'ready') return { label: 'Ready to collect 🛍️', cls: 'ok' };
+  if (o.status === 'completed' && o.fulfilment === 'collection') return { label: 'Collected ✓', cls: 'ok' };
   return { label: 'Paid — preparing your order', cls: 'ok' };
 }
 
@@ -92,7 +94,9 @@ function OrderResult({ order }) {
               </tr>
             ))}
             <tr><td>Subtotal</td><td style={{ textAlign: 'right' }}>{money(order.subtotal)}</td></tr>
-            <tr><td>Delivery</td><td style={{ textAlign: 'right' }}>{money(order.delivery_fee)}</td></tr>
+            {order.fulfilment !== 'collection' && (
+              <tr><td>Delivery</td><td style={{ textAlign: 'right' }}>{money(order.delivery_fee)}</td></tr>
+            )}
             <tr><td><strong>Total</strong></td><td style={{ textAlign: 'right' }}><strong>{money(order.total)}</strong></td></tr>
           </tbody>
         </table>
@@ -107,7 +111,12 @@ function OrderResult({ order }) {
             </a>
           </p>
         )}
-        {order.delivery_address && (
+        {order.fulfilment === 'collection' ? (
+          <p style={{ fontSize: 14 }}>
+            🛍️ <strong>Collection{order.pickup_label ? ` — ${order.pickup_label}` : ''}</strong>
+            {order.collection_address && <><br /><span className="muted">{order.collection_address}</span></>}
+          </p>
+        ) : order.delivery_address && (
           <p className="muted" style={{ fontSize: 14 }}>Delivering to:<br />{maskAddress(order.delivery_address, order.id)}</p>
         )}
         <p className="muted" style={{ fontSize: 13 }}>

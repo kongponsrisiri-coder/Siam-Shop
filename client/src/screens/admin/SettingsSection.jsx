@@ -14,8 +14,57 @@ const FIELDS = [
   { key: 'bank_details', label: 'Bank details (emailed to bank-transfer customers)', type: 'textarea' },
 ];
 
+// Opening hours (SIAMSHOP-503) + Click & Collect (SIAMSHOP-504) — stored as
+// settings strings: opening_hours (JSON), bank_holidays, collection_* keys.
+const DAY_ROWS = [
+  ['mon', 'Monday'], ['tue', 'Tuesday'], ['wed', 'Wednesday'], ['thu', 'Thursday'],
+  ['fri', 'Friday'], ['sat', 'Saturday'], ['sun', 'Sunday'],
+];
+function parseHours(raw) {
+  try {
+    const o = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    const out = {};
+    for (const [k] of DAY_ROWS) out[k] = o && o[k] ? { open: true, from: o[k].from, to: o[k].to } : { open: false, from: '09:30', to: '18:00' };
+    return out;
+  } catch {
+    const out = {};
+    for (const [k] of DAY_ROWS) out[k] = { open: false, from: '09:30', to: '18:00' };
+    return out;
+  }
+}
+function serialiseHours(h) {
+  const out = {};
+  let any = false;
+  for (const [k] of DAY_ROWS) {
+    if (h[k]?.open && h[k].from && h[k].to && h[k].from < h[k].to) { out[k] = { from: h[k].from, to: h[k].to }; any = true; }
+  }
+  return any ? JSON.stringify(out) : '';
+}
+
+function HoursEditor({ hours, onChange }) {
+  function set(k, patch) {
+    onChange({ ...hours, [k]: { ...hours[k], ...patch } });
+  }
+  return (
+    <div className="hours-grid">
+      {DAY_ROWS.map(([k, label]) => (
+        <React.Fragment key={k}>
+          <label className="row" style={{ margin: 0, gap: 6 }}>
+            <input type="checkbox" style={{ width: 'auto' }} checked={!!hours[k].open} onChange={(e) => set(k, { open: e.target.checked })} />
+            {label.slice(0, 3)}
+          </label>
+          <input type="time" value={hours[k].from} disabled={!hours[k].open} onChange={(e) => set(k, { from: e.target.value })} />
+          <input type="time" value={hours[k].to} disabled={!hours[k].open} onChange={(e) => set(k, { to: e.target.value })} />
+          <span className="muted" style={{ fontSize: 12 }}>{hours[k].open ? '' : 'closed'}</span>
+        </React.Fragment>
+      ))}
+    </div>
+  );
+}
+
 export default function SettingsSection() {
   const [form, setForm] = useState(null);
+  const [hours, setHours] = useState(parseHours(null));
   const [shop, setShop] = useState(null);
   const [health, setHealth] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -46,6 +95,7 @@ export default function SettingsSection() {
     try {
       const s = await api.adminGetSettings();
       setForm(s || {});
+      setHours(parseHours(s?.opening_hours));
     } catch (err) {
       setError(err.message);
     } finally {
@@ -73,6 +123,12 @@ export default function SettingsSection() {
       const patch = {};
       FIELDS.forEach((f) => { patch[f.key] = form[f.key] ?? ''; });
       patch.shop_language_default = form.shop_language_default ?? 'en';
+      patch.opening_hours = serialiseHours(hours);
+      patch.bank_holidays = form.bank_holidays ?? '';
+      patch.collection_enabled = form.collection_enabled === 'true' ? 'true' : 'false';
+      patch.collection_address = form.collection_address ?? '';
+      patch.pickup_lead_minutes = String(Number(form.pickup_lead_minutes) || 20);
+      patch.pickup_slot_minutes = String(Number(form.pickup_slot_minutes) || 15);
       const updated = await api.adminUpdateSettings(patch);
       setForm(updated || form);
       setSaved(true);
@@ -125,6 +181,36 @@ export default function SettingsSection() {
               </select>
             </div>
           </div>
+          <h3 style={{ marginTop: 20 }}>Opening hours</h3>
+          <p className="muted" style={{ marginTop: 0, fontSize: 13 }}>
+            Leave every day unticked to accept orders at any time. When set, the website stops taking
+            orders outside these hours (scheduled collections inside them still work) and the till warns.
+            Times are UK local time.
+          </p>
+          <HoursEditor hours={hours} onChange={(h) => { setHours(h); setSaved(false); }} />
+          <label style={{ marginTop: 10 }}>Bank holidays (use Sunday hours) — dates YYYY-MM-DD, comma separated</label>
+          <input value={form.bank_holidays ?? ''} onChange={(e) => set('bank_holidays', e.target.value)} placeholder="2026-12-25, 2026-12-28, 2027-01-01" />
+
+          <h3 style={{ marginTop: 20 }}>Click &amp; Collect</h3>
+          <label className="row" style={{ gap: 8 }}>
+            <input type="checkbox" style={{ width: 'auto' }} checked={form.collection_enabled === 'true'} onChange={(e) => set('collection_enabled', e.target.checked ? 'true' : 'false')} />
+            <span>Offer collection at checkout (customer picks a time; you mark it ready and they get an email)</span>
+          </label>
+          <div className="row" style={{ gap: 12, flexWrap: 'wrap' }}>
+            <div style={{ flex: '1 1 100%' }}>
+              <label>Collection address (shown to customers)</label>
+              <input value={form.collection_address ?? ''} onChange={(e) => set('collection_address', e.target.value)} placeholder="16 London Rd, Guildford GU1 2AF" />
+            </div>
+            <div style={{ flex: '1 1 160px' }}>
+              <label>Lead time (minutes)</label>
+              <input type="number" min="0" value={form.pickup_lead_minutes ?? 20} onChange={(e) => set('pickup_lead_minutes', e.target.value)} />
+            </div>
+            <div style={{ flex: '1 1 160px' }}>
+              <label>Slot length (minutes)</label>
+              <input type="number" min="5" value={form.pickup_slot_minutes ?? 15} onChange={(e) => set('pickup_slot_minutes', e.target.value)} />
+            </div>
+          </div>
+
           {saved && <p style={{ color: '#16a34a', fontSize: 13 }}>Saved ✓</p>}
           <div className="row" style={{ marginTop: 12 }}>
             <button className="btn" disabled={busy}>{busy ? 'Saving…' : 'Save settings'}</button>

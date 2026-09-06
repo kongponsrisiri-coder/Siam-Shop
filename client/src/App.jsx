@@ -14,6 +14,7 @@ import TillScreen from './screens/TillScreen.jsx';
 import ScannerScreen from './screens/ScannerScreen.jsx';
 import OrderStatusScreen from './screens/OrderStatusScreen.jsx';
 import AccountScreen from './screens/AccountScreen.jsx';
+import PrepScreen from './screens/PrepScreen.jsx';
 
 function LangToggle() {
   const { lang, toggle } = useLang();
@@ -45,6 +46,7 @@ function TopBar() {
         <span className="staff-links">
           <Link to="/admin" className="staff-link">Admin</Link>
           <Link to="/till" className="staff-link">Till</Link>
+          <Link to="/prep" className="staff-link">Prep</Link>
           <Link to="/scan" className="staff-link">Scan</Link>
         </span>
       </div>
@@ -57,6 +59,7 @@ export default function App() {
     <Routes>
       {/* Till and scanner are focused full-screen surfaces with their own headers. */}
       <Route path="/till" element={<TillScreen />} />
+      <Route path="/prep" element={<PrepScreen />} />
       <Route path="/scan" element={<ScannerScreen />} />
       <Route
         path="*"

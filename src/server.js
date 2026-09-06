@@ -22,6 +22,7 @@ const messenger = require('./services/messengerService');
 const emailService = require('./services/emailService');
 const carriers = require('./services/carriers');
 const assistant = require('./services/assistantService');
+const availability = require('./services/availability');
 
 const app = express();
 
@@ -172,6 +173,44 @@ async function getSettings(shopId) {
   return out;
 }
 
+// ---------------------------------------------------------------------------
+// Opening hours + category availability (SIAMSHOP-503) and Click & Collect
+// settings (SIAMSHOP-504), resolved once per request into a context object.
+// ---------------------------------------------------------------------------
+async function shopContext(shopId, settings) {
+  const s = settings || (await getSettings(shopId));
+  const { rows: cats } = await pool.query(
+    `SELECT id, availability FROM categories WHERE shop_id = $1 AND availability IS NOT NULL`, [shopId]
+  );
+  const catRules = new Map();
+  for (const c of cats) {
+    const rules = availability.parseRules(c.availability);
+    if (rules) catRules.set(c.id, rules);
+  }
+  return {
+    settings: s,
+    tz: s.timezone || availability.TZ_DEFAULT,
+    hours: availability.parseOpeningHours(s.opening_hours),
+    bankHolidays: availability.parseBankHolidays(s.bank_holidays),
+    catRules,
+    collectionEnabled: s.collection_enabled === 'true',
+    leadMin: Number(s.pickup_lead_minutes) || 20,
+    stepMin: Number(s.pickup_slot_minutes) || 15,
+    collectionAddress: s.collection_address || '',
+  };
+}
+
+// Add available_now / availability_text to product rows from their category's
+// window. `at` defaults to now; pass the pickup time for pre-orders.
+function annotateAvailability(rows, ctx, at = new Date()) {
+  for (const r of rows) {
+    const rules = r.category_id ? ctx.catRules.get(Number(r.category_id)) : null;
+    r.available_now = availability.availableAt(rules, at, ctx.tz);
+    r.availability_text = rules ? availability.describeRules(rules) : null;
+  }
+  return rows;
+}
+
 // Compute the delivery fee for a postcode against a shop's settings.
 // Returns { zone, label, fee } or null for an invalid postcode.
 function quoteDelivery(settings, postcode) {
@@ -289,8 +328,42 @@ async function createPendingOrder(client, shopId, body, { paymentMethod, source 
   if (items.length === 0) throw httpError(400, 'Your basket is empty');
 
   const settings = await getSettings(shopId);
-  const quote = quoteDelivery(settings, body?.postcode);
-  if (!quote) throw httpError(400, 'Enter a valid UK postcode for delivery');
+  const ctx = await shopContext(shopId, settings);
+  const now = new Date();
+
+  // Fulfilment (SIAMSHOP-504): collection needs a pickup slot and no address;
+  // delivery keeps the postcode quote. Collection is only offered when enabled.
+  const wantsCollection = body?.fulfilment === 'collection';
+  if (wantsCollection && !ctx.collectionEnabled) throw httpError(400, 'Collection is not available for this shop');
+  const fulfilment = wantsCollection ? 'collection' : 'delivery';
+  let pickupAt = null;
+  let quote = null;
+  if (fulfilment === 'collection') {
+    const raw = body?.pickup_at;
+    if (raw === 'asap' || raw == null || raw === '') {
+      pickupAt = new Date(now.getTime() + ctx.leadMin * 60 * 1000);
+      if (!availability.isOpenAt(ctx.hours, pickupAt, ctx.tz, ctx.bankHolidays)) {
+        const next = availability.nextOpening(ctx.hours, now, ctx.tz, ctx.bankHolidays);
+        throw httpError(409, `We're closed right now${next ? ` — we open ${next}` : ''}. Choose a pickup time instead.`);
+      }
+    } else {
+      const err = availability.validatePickup(raw, { hours: ctx.hours, now, tz: ctx.tz, bankHolidays: ctx.bankHolidays, leadMin: ctx.leadMin });
+      if (err) throw httpError(400, err);
+      pickupAt = new Date(raw);
+    }
+  } else {
+    quote = quoteDelivery(settings, body?.postcode);
+    if (!quote) throw httpError(400, 'Enter a valid UK postcode for delivery');
+    // Shop closed (only when opening hours are configured) → not accepting
+    // ASAP orders; scheduled collections above are the way round it.
+    if (ctx.hours && !availability.isOpenAt(ctx.hours, now, ctx.tz, ctx.bankHolidays)) {
+      const next = availability.nextOpening(ctx.hours, now, ctx.tz, ctx.bankHolidays);
+      throw httpError(409, `Not accepting orders right now${next ? ` — we open ${next}` : ''}.`);
+    }
+  }
+  // Menu windows (SIAMSHOP-503) are judged at the pickup time, so a 10:00
+  // pre-order of lunch for 12:30 is fine.
+  const availabilityAt = pickupAt || now;
 
   // Recompute subtotal from live prices (+ chosen options) and snapshot each line.
   let subtotal = 0;
@@ -299,11 +372,15 @@ async function createPendingOrder(client, shopId, body, { paymentMethod, source 
     const qty = Number(it.qty);
     if (!Number.isInteger(qty) || qty <= 0) throw httpError(400, 'Invalid quantity');
     const { rows } = await client.query(
-      `SELECT id, name, price FROM products WHERE id = $1 AND shop_id = $2 AND is_active = TRUE`,
+      `SELECT id, name, price, category_id FROM products WHERE id = $1 AND shop_id = $2 AND is_active = TRUE`,
       [it.product_id, shopId]
     );
     const p = rows[0];
     if (!p) throw httpError(404, `Product ${it.product_id} is unavailable`);
+    const rules = p.category_id ? ctx.catRules.get(Number(p.category_id)) : null;
+    if (!availability.availableAt(rules, availabilityAt, ctx.tz)) {
+      throw httpError(409, `${p.name} is only available ${availability.describeRules(rules)}`);
+    }
     const { snapshot, total: optionsTotal } = await resolveOptions(client, p, it.option_ids);
     const lineTotal = +((Number(p.price) + optionsTotal) * qty).toFixed(2);
     subtotal += lineTotal;
@@ -315,17 +392,18 @@ async function createPendingOrder(client, shopId, body, { paymentMethod, source 
     throw httpError(400, `Minimum order is £${minOrder.toFixed(2)} (your items total £${subtotal.toFixed(2)})`);
   }
 
-  const deliveryFee = quote.fee;
+  const deliveryFee = quote ? quote.fee : 0;
   const total = subtotal + deliveryFee;
   const customerId = await upsertCustomer(client, shopId, body?.customer);
 
   const orderRes = await client.query(
     `INSERT INTO orders (shop_id, customer_id, channel, source, status, subtotal, delivery_fee, total,
-                         payment_method, payment_status, delivery_address, notes)
-     VALUES ($1,$2,'online',$3,'pending',$4,$5,$6,$7,'pending',$8,$9)
+                         payment_method, payment_status, delivery_address, notes, fulfilment, pickup_at)
+     VALUES ($1,$2,'online',$3,'pending',$4,$5,$6,$7,'pending',$8,$9,$10,$11)
      RETURNING id, created_at`,
     [shopId, customerId, source, subtotal, deliveryFee, total, paymentMethod,
-     body?.delivery_address || null, body?.notes || null]
+     fulfilment === 'delivery' ? body?.delivery_address || null : null, body?.notes || null,
+     fulfilment, pickupAt]
   );
   const orderId = orderRes.rows[0].id;
 
@@ -339,7 +417,12 @@ async function createPendingOrder(client, shopId, body, { paymentMethod, source 
     );
   }
 
-  return { orderId, subtotal, deliveryFee, total, created_at: orderRes.rows[0].created_at };
+  return {
+    orderId, subtotal, deliveryFee, total, created_at: orderRes.rows[0].created_at,
+    fulfilment, pickupAt,
+    pickupLabel: pickupAt ? availability.labelFor(pickupAt, ctx.tz) : null,
+    collectionAddress: ctx.collectionAddress,
+  };
 }
 
 // Fulfil an order once payment is confirmed: decrement stock + write movements
@@ -507,6 +590,9 @@ async function sendOrderEmails(order, items, baseUrl) {
     total: order.total,
     delivery_address: order.delivery_address,
     notes: order.notes,
+    fulfilment: order.fulfilment,
+    pickup_label: order.pickup_at ? availability.labelFor(order.pickup_at, settings.timezone || availability.TZ_DEFAULT) : null,
+    collection_address: settings.collection_address || '',
     items,
   };
   const statusUrl = orderStatusUrl(baseUrl, order.id, customerEmail);
@@ -584,6 +670,8 @@ app.get('/api/settings', async (req, res) => {
     const shopId = await resolveShopId(req);
     if (!shopId) return res.status(404).json({ error: 'Shop not found' });
     const s = await getSettings(shopId);
+    const ctx = await shopContext(shopId, s);
+    const now = new Date();
     res.json({
       minimum_order_amount: Number(s.minimum_order_amount || 0),
       delivery_fee_london: Number(s.delivery_fee_london || 0),
@@ -592,6 +680,15 @@ app.get('/api/settings', async (req, res) => {
       restock_day: s.restock_day || null,
       currency: s.currency || 'GBP',
       shop_language_default: s.shop_language_default || 'en',
+      // SIAMSHOP-503/504 — hours + collection (null hours = always open).
+      timezone: ctx.tz,
+      opening_hours: ctx.hours,
+      open_now: availability.isOpenAt(ctx.hours, now, ctx.tz, ctx.bankHolidays),
+      next_open: ctx.hours ? availability.nextOpening(ctx.hours, now, ctx.tz, ctx.bankHolidays) : null,
+      collection_enabled: ctx.collectionEnabled,
+      collection_address: ctx.collectionAddress,
+      pickup_lead_minutes: ctx.leadMin,
+      pickup_slot_minutes: ctx.stepMin,
     });
   } catch (err) {
     console.error('[settings]', err.message);
@@ -605,13 +702,44 @@ app.get('/api/categories', async (req, res) => {
     const shopId = await resolveShopId(req);
     if (!shopId) return res.status(404).json({ error: 'Shop not found' });
     const { rows } = await pool.query(
-      `SELECT id, name, name_th, sort_order FROM categories WHERE shop_id = $1 ORDER BY sort_order, name`,
+      `SELECT id, name, name_th, sort_order, availability FROM categories WHERE shop_id = $1 ORDER BY sort_order, name`,
       [shopId]
     );
+    const ctx = await shopContext(shopId);
+    const now = new Date();
+    for (const c of rows) {
+      const rules = availability.parseRules(c.availability);
+      c.availability = rules ? { rules } : null;
+      c.available_now = availability.availableAt(rules, now, ctx.tz);
+      c.availability_text = rules ? availability.describeRules(rules) : null;
+    }
     res.json(rows);
   } catch (err) {
     console.error('[categories]', err.message);
     res.status(500).json({ error: 'Failed to load categories' });
+  }
+});
+
+// Click & Collect pickup slots (SIAMSHOP-504) — today + tomorrow, inside
+// opening hours, from now + lead time. Empty when collection is off.
+app.get('/api/pickup-slots', async (req, res) => {
+  try {
+    const shopId = await resolveShopId(req);
+    if (!shopId) return res.status(404).json({ error: 'Shop not found' });
+    const ctx = await shopContext(shopId);
+    if (!ctx.collectionEnabled) return res.json({ enabled: false, asap: false, slots: [] });
+    const now = new Date();
+    const asapAt = new Date(now.getTime() + ctx.leadMin * 60 * 1000);
+    res.json({
+      enabled: true,
+      asap: availability.isOpenAt(ctx.hours, asapAt, ctx.tz, ctx.bankHolidays),
+      asap_label: `ASAP (about ${ctx.leadMin} min)`,
+      slots: availability.pickupSlots({ hours: ctx.hours, now, tz: ctx.tz, bankHolidays: ctx.bankHolidays, leadMin: ctx.leadMin, stepMin: ctx.stepMin }),
+      collection_address: ctx.collectionAddress,
+    });
+  } catch (err) {
+    console.error('[pickup-slots]', err.message);
+    res.status(500).json({ error: 'Failed to load pickup slots' });
   }
 });
 
@@ -777,7 +905,9 @@ app.post('/api/orders', async (req, res) => {
         await emailService.sendBankTransferInstructions(
           email,
           shopRows[0]?.name || 'SiamShop',
-          { id: order.orderId, total: order.total, items, delivery_address: req.body?.delivery_address },
+          { id: order.orderId, total: order.total, items,
+            delivery_address: order.fulfilment === 'delivery' ? req.body?.delivery_address : null,
+            fulfilment: order.fulfilment, pickup_label: order.pickupLabel, collection_address: order.collectionAddress },
           bankDetails,
           orderStatusUrl(originFromReq(req), order.orderId, email)
         );
@@ -806,6 +936,7 @@ app.get('/api/orders/:id', lookupLimiter, async (req, res) => {
     let { rows } = await pool.query(
       `SELECT o.id, o.status, o.payment_status, o.payment_method, o.subtotal, o.delivery_fee, o.total,
               o.delivery_address, o.stripe_payment_intent_id, o.tracking_number, o.carrier, o.created_at,
+              o.fulfilment, o.pickup_at, o.ready_at,
               c.email AS customer_email
        FROM orders o LEFT JOIN customers c ON c.id = o.customer_id
        WHERE o.id = $1 AND o.shop_id = $2`,
@@ -826,7 +957,7 @@ app.get('/api/orders/:id', lookupLimiter, async (req, res) => {
           await fulfilOrder(order.id, originFromReq(req));
           ({ rows } = await pool.query(
             `SELECT id, status, payment_status, payment_method, subtotal, delivery_fee, total,
-                    delivery_address, tracking_number, carrier, created_at
+                    delivery_address, tracking_number, carrier, created_at, fulfilment, pickup_at, ready_at
              FROM orders WHERE id = $1`,
             [order.id]
           ));
@@ -845,7 +976,14 @@ app.get('/api/orders/:id', lookupLimiter, async (req, res) => {
     );
     const carrier_tracking_url = carriers.trackingUrl(order.carrier, order.tracking_number);
     const carrier_name = order.tracking_number ? carriers.nameOf(order.carrier) : null;
-    res.json({ ...order, items, carrier_tracking_url, carrier_name });
+    let collection_address = null;
+    let pickup_label = null;
+    if (order.fulfilment === 'collection') {
+      const s = await getSettings(shopId);
+      collection_address = s.collection_address || null;
+      pickup_label = order.pickup_at ? availability.labelFor(order.pickup_at, s.timezone || availability.TZ_DEFAULT) : null;
+    }
+    res.json({ ...order, items, carrier_tracking_url, carrier_name, collection_address, pickup_label });
   } catch (err) {
     console.error('[orders GET]', err.message);
     res.status(500).json({ error: 'Failed to load order' });
@@ -987,6 +1125,7 @@ app.get('/api/products', async (req, res) => {
     }
     sql += ` ORDER BY c.sort_order NULLS LAST, p.sort_order, p.name`;
     const { rows } = await pool.query(sql, params);
+    annotateAvailability(rows, await shopContext(shopId));
     res.json(await attachOptionGroups(rows));
   } catch (err) {
     console.error('[products]', err.message);
@@ -1029,6 +1168,7 @@ app.get('/api/products/:id', async (req, res) => {
       [req.params.id, shopId]
     );
     if (!rows[0]) return res.status(404).json({ error: 'Product not found' });
+    annotateAvailability(rows, await shopContext(shopId));
     res.json((await attachOptionGroups(rows))[0]);
   } catch (err) {
     console.error('[product]', err.message);
@@ -1129,6 +1269,7 @@ app.get('/api/admin/products', requireAuth, async (req, res) => {
        WHERE p.shop_id = $1 ORDER BY p.created_at DESC`,
       [shopId]
     );
+    annotateAvailability(rows, await shopContext(shopId));
     res.json(await attachOptionGroups(rows));
   } catch (err) {
     console.error('[admin/products]', err.message);
@@ -1386,15 +1527,25 @@ app.post('/api/admin/test-email', requireAuth, async (req, res) => {
 // ---------------------------------------------------------------------------
 // Admin — category management (SIAMSHOP-002)
 // ---------------------------------------------------------------------------
+// Body.availability → JSON string for the column. undefined/null/[] → null
+// (always available); malformed → false (caller returns 400).
+function categoryAvailabilityParam(body) {
+  const raw = body?.availability;
+  if (raw == null || raw === '' || (Array.isArray(raw?.rules) && raw.rules.length === 0)) return null;
+  const rules = availability.parseRules(raw);
+  return rules ? JSON.stringify({ rules }) : false;
+}
 app.post('/api/admin/categories', requireAuth, async (req, res) => {
   try {
     const shopId = await resolveShopId(req);
     if (!shopId) return res.status(404).json({ error: 'Shop not found' });
     const { name, name_th, sort_order } = req.body || {};
     if (!name || !String(name).trim()) return res.status(400).json({ error: 'Name is required' });
+    const avail = categoryAvailabilityParam(req.body);
+    if (avail === false) return res.status(400).json({ error: 'Availability needs at least one day and from < to' });
     const { rows } = await pool.query(
-      `INSERT INTO categories (shop_id, name, name_th, sort_order) VALUES ($1,$2,$3,$4) RETURNING *`,
-      [shopId, String(name).trim(), name_th || null, Number(sort_order) || 0]
+      `INSERT INTO categories (shop_id, name, name_th, sort_order, availability) VALUES ($1,$2,$3,$4,$5) RETURNING *`,
+      [shopId, String(name).trim(), name_th || null, Number(sort_order) || 0, avail]
     );
     res.status(201).json(rows[0]);
   } catch (err) {
@@ -1409,11 +1560,15 @@ app.put('/api/admin/categories/:id', requireAuth, async (req, res) => {
     const shopId = await resolveShopId(req);
     if (!shopId) return res.status(404).json({ error: 'Shop not found' });
     const { name, name_th, sort_order } = req.body || {};
+    const avail = categoryAvailabilityParam(req.body);
+    if (avail === false) return res.status(400).json({ error: 'Availability needs at least one day and from < to' });
     const { rows } = await pool.query(
-      `UPDATE categories SET name = COALESCE($3, name), name_th = $4, sort_order = COALESCE($5, sort_order)
+      `UPDATE categories SET name = COALESCE($3, name), name_th = $4, sort_order = COALESCE($5, sort_order),
+              availability = CASE WHEN $6::boolean THEN $7::jsonb ELSE availability END
        WHERE id = $1 AND shop_id = $2 RETURNING *`,
       [req.params.id, shopId, name != null ? String(name).trim() : null, name_th ?? null,
-       sort_order != null ? Number(sort_order) : null]
+       sort_order != null ? Number(sort_order) : null,
+       Object.prototype.hasOwnProperty.call(req.body || {}, 'availability'), avail]
     );
     if (!rows[0]) return res.status(404).json({ error: 'Category not found' });
     res.json(rows[0]);
@@ -1455,6 +1610,8 @@ app.post('/api/sales', requireAuth, async (req, res) => {
   const paymentMethod = req.body?.payment_method === 'card' ? 'card' : 'cash';
   const tendered = req.body?.amount_tendered != null ? Number(req.body.amount_tendered) : null;
   const staff = req.auth?.name || 'admin';
+  // Till sales are takeaway unless staff mark the customer as eating in (SIAMSHOP-504).
+  const fulfilment = req.body?.fulfilment === 'dine_in' ? 'dine_in' : 'takeaway';
 
   if (items.length === 0) return res.status(400).json({ error: 'Cart is empty' });
 
@@ -1495,10 +1652,10 @@ app.post('/api/sales', requireAuth, async (req, res) => {
 
     const orderRes = await client.query(
       `INSERT INTO orders (shop_id, channel, status, subtotal, total, payment_method,
-                           amount_tendered, change_given, staff, payment_status, fulfilled_at)
-       VALUES ($1,'instore','completed',$2,$3,$4,$5,$6,$7,'paid',NOW())
+                           amount_tendered, change_given, staff, payment_status, fulfilled_at, fulfilment)
+       VALUES ($1,'instore','completed',$2,$3,$4,$5,$6,$7,'paid',NOW(),$8)
        RETURNING id, created_at`,
-      [shopId, subtotal, total, paymentMethod, tendered, change, staff]
+      [shopId, subtotal, total, paymentMethod, tendered, change, staff, fulfilment]
     );
     const orderId = orderRes.rows[0].id;
 
@@ -1804,6 +1961,7 @@ app.get('/api/admin/orders', requireAuth, async (req, res) => {
       `SELECT o.id, o.channel, o.source, o.status, o.payment_status, o.payment_method,
               o.subtotal, o.delivery_fee, o.total, o.created_at, o.fulfilled_at,
               o.dispatch_date, o.tracking_number,
+              o.fulfilment, o.pickup_at, o.ready_at, o.prep_status,
               c.name AS customer_name, c.email AS customer_email
        FROM orders o
        LEFT JOIN customers c ON c.id = o.customer_id
@@ -1828,6 +1986,7 @@ app.get('/api/admin/orders.csv', requireAuth, async (req, res) => {
       `SELECT o.id, o.created_at, o.channel, o.source, o.status, o.payment_status, o.payment_method,
               c.name AS customer_name, c.email AS customer_email, c.phone AS customer_phone,
               o.subtotal, o.delivery_fee, o.total, o.dispatch_date, o.tracking_number, o.delivery_address,
+              o.fulfilment, o.pickup_at,
               (SELECT string_agg(oi.qty || 'x ' || oi.name_snapshot, '; ')
                  FROM order_items oi WHERE oi.order_id = o.id) AS items
        FROM orders o LEFT JOIN customers c ON c.id = o.customer_id
@@ -1972,6 +2131,177 @@ app.post('/api/admin/orders/:id/cancel', requireAuth, async (req, res) => {
     res.status(500).json({ error: 'Failed to cancel order' });
   } finally {
     client.release();
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Click & Collect lifecycle (SIAMSHOP-504) + counter prep (SIAMSHOP-505)
+// ---------------------------------------------------------------------------
+
+// Mark an order ready. Collection orders → status 'ready' + one "ready to
+// collect" email (idempotent: a second call never re-sends). Till/dine-in
+// orders just get prep_status/ready_at. Returns the updated order row.
+async function markOrderReady(shopId, orderId, baseUrl) {
+  const client = await pool.connect();
+  let order;
+  let firstTime = false;
+  try {
+    await client.query('BEGIN');
+    const { rows: cur } = await client.query(
+      `SELECT ready_at FROM orders WHERE id = $1 AND shop_id = $2 FOR UPDATE`, [orderId, shopId]
+    );
+    if (!cur[0]) { await client.query('ROLLBACK'); return null; }
+    firstTime = !cur[0].ready_at;
+    ({ rows: [order] } = await client.query(
+      `UPDATE orders
+          SET ready_at = COALESCE(ready_at, NOW()),
+              prep_status = 'ready',
+              status = CASE WHEN fulfilment = 'collection' AND status NOT IN ('cancelled','completed') THEN 'ready' ELSE status END
+        WHERE id = $1 AND shop_id = $2
+        RETURNING *`,
+      [orderId, shopId]
+    ));
+    await client.query('COMMIT');
+  } catch (e) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw e;
+  } finally {
+    client.release();
+  }
+  // Email exactly once — on the call that set ready_at.
+  if (order.fulfilment === 'collection' && firstTime && order.status === 'ready') {
+    (async () => {
+      try {
+        const { shopName, customerEmail } = await orderEmailContext(order);
+        if (!customerEmail) return;
+        const s = await getSettings(shopId);
+        await emailService.sendOrderReady(customerEmail, shopName, {
+          id: order.id,
+          collection_address: s.collection_address || '',
+          pickup_label: order.pickup_at ? availability.labelFor(order.pickup_at, s.timezone || availability.TZ_DEFAULT) : null,
+        }, orderStatusUrl(baseUrl, order.id, customerEmail));
+      } catch (e) {
+        console.warn('[email] ready', order.id, e.message);
+      }
+    })();
+  }
+  return order;
+}
+
+// Collected / handed over → completed.
+async function markOrderCollected(shopId, orderId) {
+  const { rows } = await pool.query(
+    `UPDATE orders
+        SET status = CASE WHEN status = 'cancelled' THEN status ELSE 'completed' END,
+            prep_status = 'done',
+            fulfilled_at = COALESCE(fulfilled_at, NOW()),
+            ready_at = COALESCE(ready_at, NOW())
+      WHERE id = $1 AND shop_id = $2 RETURNING *`,
+    [orderId, shopId]
+  );
+  return rows[0] || null;
+}
+
+app.post('/api/admin/orders/:id/ready', requireAuth, async (req, res) => {
+  try {
+    const shopId = await resolveShopId(req);
+    if (!shopId) return res.status(404).json({ error: 'Shop not found' });
+    const order = await markOrderReady(shopId, req.params.id, originFromReq(req));
+    if (!order) return res.status(404).json({ error: 'Order not found' });
+    res.json(order);
+  } catch (err) {
+    console.error('[admin/orders ready]', err.message);
+    res.status(500).json({ error: 'Failed to mark ready' });
+  }
+});
+
+app.post('/api/admin/orders/:id/collected', requireAuth, async (req, res) => {
+  try {
+    const shopId = await resolveShopId(req);
+    if (!shopId) return res.status(404).json({ error: 'Shop not found' });
+    const order = await markOrderCollected(shopId, req.params.id);
+    if (!order) return res.status(404).json({ error: 'Order not found' });
+    res.json(order);
+  } catch (err) {
+    console.error('[admin/orders collected]', err.message);
+    res.status(500).json({ error: 'Failed to mark collected' });
+  }
+});
+
+// Prep screen feed (SIAMSHOP-505): orders from the last 12h that contain at
+// least one made-to-order (kind='food') line, are paid (or till sales), not
+// cancelled and not yet done. Food lines carry their options; grocery lines
+// are counted, not listed — the counter doesn't pack shelf items.
+app.get('/api/prep', requireAuth, async (req, res) => {
+  try {
+    const shopId = await resolveShopId(req);
+    if (!shopId) return res.status(404).json({ error: 'Shop not found' });
+    const { rows: orders } = await pool.query(
+      `SELECT o.id, o.channel, o.source, o.status, o.fulfilment, o.pickup_at, o.ready_at, o.prep_status,
+              o.notes, o.created_at, o.payment_status, c.name AS customer_name
+       FROM orders o LEFT JOIN customers c ON c.id = o.customer_id
+       WHERE o.shop_id = $1
+         AND o.created_at > NOW() - INTERVAL '12 hours'
+         AND o.status <> 'cancelled'
+         AND o.prep_status IS DISTINCT FROM 'done'
+         AND (o.payment_status = 'paid' OR o.channel = 'instore')
+         AND EXISTS (SELECT 1 FROM order_items oi JOIN products p ON p.id = oi.product_id
+                      WHERE oi.order_id = o.id AND p.kind = 'food')
+       ORDER BY o.pickup_at NULLS FIRST, o.created_at`,
+      [shopId]
+    );
+    if (orders.length === 0) return res.json({ orders: [], server_time: new Date().toISOString() });
+    const ids = orders.map((o) => o.id);
+    const { rows: items } = await pool.query(
+      `SELECT oi.order_id, oi.name_snapshot, oi.qty, oi.options_snapshot, COALESCE(p.kind, 'retail') AS kind
+       FROM order_items oi LEFT JOIN products p ON p.id = oi.product_id
+       WHERE oi.order_id = ANY($1::int[]) ORDER BY oi.id`,
+      [ids]
+    );
+    const byOrder = new Map(orders.map((o) => [o.id, { ...o, food: [], grocery_count: 0 }]));
+    for (const it of items) {
+      const o = byOrder.get(it.order_id);
+      if (it.kind === 'food') o.food.push({ name: it.name_snapshot, qty: it.qty, options: it.options_snapshot || [] });
+      else o.grocery_count += it.qty;
+    }
+    const s = await getSettings(shopId);
+    const tz = s.timezone || availability.TZ_DEFAULT;
+    const out = [...byOrder.values()].map((o) => ({
+      ...o,
+      customer_name: o.customer_name ? String(o.customer_name).split(' ')[0] : null,
+      pickup_label: o.pickup_at ? availability.labelFor(o.pickup_at, tz) : null,
+    }));
+    res.json({ orders: out, server_time: new Date().toISOString() });
+  } catch (err) {
+    console.error('[prep]', err.message);
+    res.status(500).json({ error: 'Failed to load prep queue' });
+  }
+});
+
+// Prep state transitions: preparing → ready → done.
+app.post('/api/prep/:id/status', requireAuth, async (req, res) => {
+  try {
+    const shopId = await resolveShopId(req);
+    if (!shopId) return res.status(404).json({ error: 'Shop not found' });
+    const next = String(req.body?.prep_status || '');
+    let order;
+    if (next === 'preparing') {
+      ({ rows: [order] } = await pool.query(
+        `UPDATE orders SET prep_status = 'preparing' WHERE id = $1 AND shop_id = $2 AND prep_status IS DISTINCT FROM 'done' RETURNING *`,
+        [req.params.id, shopId]
+      ));
+    } else if (next === 'ready') {
+      order = await markOrderReady(shopId, req.params.id, originFromReq(req));
+    } else if (next === 'done') {
+      order = await markOrderCollected(shopId, req.params.id);
+    } else {
+      return res.status(400).json({ error: 'prep_status must be preparing, ready or done' });
+    }
+    if (!order) return res.status(404).json({ error: 'Order not found' });
+    res.json(order);
+  } catch (err) {
+    console.error('[prep status]', err.message);
+    res.status(500).json({ error: 'Failed to update prep status' });
   }
 });
 

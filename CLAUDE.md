@@ -207,7 +207,7 @@ Built around the shared stock core. Surfaces in build order:
 - **SIAMSHOP-403** — AI product descriptions; **SIAMSHOP-404** — delivery zones/fees;
   **SIAMSHOP-405** — customer accounts; **SIAMSHOP-406** — multi-shop slug routing.
 
-**M5 — Food counter on the grocery till** ← *building next (client: Cha & Pinto Box, Guildford)*
+**M5 — Food counter on the grocery till** — 501–505 built 2026-09-06 on branch `siamshop-m5-options` (client: Cha & Pinto Box, Guildford); 506 onboarding pending client inputs
 Full spec: `docs/tickets/SIAMSHOP-M5-food-counter.md`
 - **SIAMSHOP-501** — Product options: option groups + priced choices (size / toppings /
   add-ons), server-side authoritative pricing, `order_items.options_snapshot`.

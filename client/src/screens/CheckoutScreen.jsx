@@ -4,6 +4,12 @@ import { useCart } from '../cart.jsx';
 import { useT } from '../lang.jsx';
 import { api } from '../api.js';
 
+// Chosen options under an order line (shared by the success + summary views).
+function LineOptions({ list }) {
+  if (!Array.isArray(list) || list.length === 0) return null;
+  return <div className="line-opts">{list.map((o) => o.name).join(', ')}</div>;
+}
+
 // Order summary shown after a successful card payment / on the /order/success
 // route. Reads ?order= or ?session_id= and fetches the order, then clears cart.
 function SuccessView() {
@@ -26,6 +32,8 @@ function SuccessView() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const collection = order?.fulfilment === 'collection';
+
   return (
     <div className="container center">
       <h1>🎉 Thank you!</h1>
@@ -38,15 +46,19 @@ function SuccessView() {
       {order && (
         <div className="panel" style={{ maxWidth: 480, margin: '20px auto', textAlign: 'left' }}>
           <h3 style={{ marginTop: 0 }}>Order #{order.id}</h3>
+          {collection && (
+            <p style={{ marginTop: 0 }}>
+              🛍️ <strong>Collection{order.pickup_label ? ` — ${order.pickup_label}` : ''}</strong>
+              {order.collection_address && <><br /><span className="muted">{order.collection_address}</span></>}
+            </p>
+          )}
           <table>
             <tbody>
               {(order.items || []).map((it, idx) => (
                 <tr key={idx}>
                   <td>
                     {it.name_snapshot} × {it.qty}
-                    {Array.isArray(it.options_snapshot) && it.options_snapshot.length > 0 && (
-                      <div className="line-opts">{it.options_snapshot.map((o) => o.name).join(', ')}</div>
-                    )}
+                    <LineOptions list={it.options_snapshot} />
                   </td>
                   <td style={{ textAlign: 'right', verticalAlign: 'top' }}>£{Number(it.line_total).toFixed(2)}</td>
                 </tr>
@@ -55,10 +67,12 @@ function SuccessView() {
                 <td>Subtotal</td>
                 <td style={{ textAlign: 'right' }}>£{Number(order.subtotal).toFixed(2)}</td>
               </tr>
-              <tr>
-                <td>Delivery</td>
-                <td style={{ textAlign: 'right' }}>£{Number(order.delivery_fee).toFixed(2)}</td>
-              </tr>
+              {!collection && (
+                <tr>
+                  <td>Delivery</td>
+                  <td style={{ textAlign: 'right' }}>£{Number(order.delivery_fee).toFixed(2)}</td>
+                </tr>
+              )}
               <tr>
                 <td><strong>Total</strong></td>
                 <td style={{ textAlign: 'right' }}><strong>£{Number(order.total).toFixed(2)}</strong></td>
@@ -80,6 +94,32 @@ function SuccessView() {
   );
 }
 
+// Pickup slot chooser (SIAMSHOP-504): ASAP + today/tomorrow slots from the API.
+function PickupSlots({ slots, value, onChange }) {
+  const t = useT();
+  if (!slots) return <div className="muted" style={{ fontSize: 13 }}>Loading times…</div>;
+  return (
+    <div>
+      <label>{t('pickupTime')} *</label>
+      <div className="slot-grid">
+        {slots.asap && (
+          <button type="button" className={value === 'asap' ? 'on' : ''} onClick={() => onChange('asap')}>
+            {slots.asap_label || 'ASAP'}
+          </button>
+        )}
+        {slots.slots.map((s) => (
+          <button type="button" key={s.at} className={value === s.at ? 'on' : ''} onClick={() => onChange(s.at)}>
+            {s.label}
+          </button>
+        ))}
+      </div>
+      {!slots.asap && slots.slots.length === 0 && (
+        <div className="err" style={{ fontSize: 13 }}>No collection times available right now.</div>
+      )}
+    </div>
+  );
+}
+
 function CheckoutForm() {
   const { items, subtotal, clear } = useCart();
   const t = useT();
@@ -91,6 +131,11 @@ function CheckoutForm() {
   const [address, setAddress] = useState('');
   const [postcode, setPostcode] = useState('');
   const [consent, setConsent] = useState(false);
+
+  // Fulfilment (SIAMSHOP-504): 'delivery' | 'collection'
+  const [fulfilment, setFulfilment] = useState('delivery');
+  const [slots, setSlots] = useState(null);
+  const [pickupAt, setPickupAt] = useState('');
 
   const [quote, setQuote] = useState(null);     // { zone, label, fee }
   const [quoteErr, setQuoteErr] = useState('');
@@ -104,8 +149,24 @@ function CheckoutForm() {
     api.getSettings().then(setSettings).catch(() => {});
   }, []);
 
+  // Load pickup slots when collection is chosen (refresh every minute so ASAP
+  // and the first slot stay honest).
+  useEffect(() => {
+    if (fulfilment !== 'collection') return;
+    let live = true;
+    const fetchSlots = () => api.pickupSlots().then((s) => {
+      if (!live) return;
+      setSlots(s);
+      setPickupAt((cur) => (cur && (cur === 'asap' ? s.asap : s.slots.some((x) => x.at === cur)) ? cur : (s.asap ? 'asap' : s.slots[0]?.at || '')));
+    }).catch(() => live && setSlots({ asap: false, slots: [] }));
+    fetchSlots();
+    const tmr = setInterval(fetchSlots, 60000);
+    return () => { live = false; clearInterval(tmr); };
+  }, [fulfilment]);
+
   // Live delivery quote as the postcode is filled in (debounced).
   useEffect(() => {
+    if (fulfilment !== 'delivery') return;
     const code = postcode.trim();
     if (code.length < 5) {
       setQuote(null);
@@ -133,34 +194,54 @@ function CheckoutForm() {
       live = false;
       clearTimeout(tmr);
     };
-  }, [postcode]);
+  }, [postcode, fulfilment]);
 
+  const collection = fulfilment === 'collection';
+  const collectionEnabled = !!settings?.collection_enabled;
+  const closed = settings && settings.opening_hours && !settings.open_now;
   const minOrder = Number(settings?.minimum_order_amount) || 0;
   const belowMin = minOrder > 0 && subtotal < minOrder;
-  const deliveryFee = quote ? Number(quote.fee) : 0;
+  const deliveryFee = !collection && quote ? Number(quote.fee) : 0;
   const total = subtotal + deliveryFee;
 
   function buildBody() {
-    return {
+    const body = {
       items: items.map((i) => ({ product_id: i.id, qty: i.qty, option_ids: i.option_ids || [] })),
-      postcode: postcode.trim(),
-      delivery_address: address.trim(),
       customer: { email: email.trim(), name: name.trim(), phone: phone.trim() },
       marketing_consent: consent,
+      fulfilment,
     };
+    if (collection) {
+      body.pickup_at = pickupAt || 'asap';
+    } else {
+      body.postcode = postcode.trim();
+      body.delivery_address = address.trim();
+    }
+    return body;
   }
 
   function validate() {
-    if (!name.trim() || !email.trim() || !address.trim() || !postcode.trim()) {
-      setError('Please fill in name, email, delivery address and postcode.');
+    if (!name.trim() || !email.trim()) {
+      setError('Please fill in your name and email.');
       return false;
+    }
+    if (collection) {
+      if (!pickupAt) {
+        setError('Please choose a pickup time.');
+        return false;
+      }
+    } else {
+      if (!address.trim() || !postcode.trim()) {
+        setError('Please fill in your delivery address and postcode.');
+        return false;
+      }
+      if (quoteErr) {
+        setError('We cannot deliver to that postcode yet.');
+        return false;
+      }
     }
     if (belowMin) {
       setError(`Minimum order is £${minOrder.toFixed(2)}.`);
-      return false;
-    }
-    if (quoteErr) {
-      setError('We cannot deliver to that postcode yet.');
       return false;
     }
     setError('');
@@ -234,6 +315,12 @@ function CheckoutForm() {
   return (
     <div className="container">
       <h1>{t('checkout')}</h1>
+      {closed && (
+        <div className="closed-banner">
+          {t('closedNow')}{settings.next_open ? ` — ${t('opens')} ${settings.next_open}` : ''}.
+          {collectionEnabled && <> {t('collectionOk')}.</>}
+        </div>
+      )}
       <div className="checkout-grid">
         <div className="panel">
           <h3 style={{ marginTop: 0 }}>Your details</h3>
@@ -243,21 +330,45 @@ function CheckoutForm() {
           <input type="email" value={email} onChange={(e) => setEmail(e.target.value)} />
           <label>Phone</label>
           <input value={phone} onChange={(e) => setPhone(e.target.value)} />
-          <label>Delivery address *</label>
-          <textarea rows="3" value={address} onChange={(e) => setAddress(e.target.value)} />
-          <label>Postcode *</label>
-          <input
-            value={postcode}
-            onChange={(e) => setPostcode(e.target.value.toUpperCase())}
-            placeholder="e.g. SW1A 1AA"
-          />
-          {quoting && <div className="muted" style={{ fontSize: 13 }}>Checking delivery…</div>}
-          {quote && (
-            <div className="quote-ok">
-              {quote.label} — £{Number(quote.fee).toFixed(2)} <span className="muted">({quote.zone})</span>
-            </div>
+
+          {collectionEnabled && (
+            <>
+              <label>How would you like your order?</label>
+              <div className="fulfil-toggle">
+                <button type="button" className={!collection ? 'on' : ''} onClick={() => setFulfilment('delivery')}>🚚 {t('deliveryOpt')}</button>
+                <button type="button" className={collection ? 'on' : ''} onClick={() => setFulfilment('collection')}>🛍️ {t('collectionOpt')}</button>
+              </div>
+            </>
           )}
-          {quoteErr && <div className="err">{quoteErr}</div>}
+
+          {collection ? (
+            <>
+              {settings?.collection_address && (
+                <p className="muted" style={{ fontSize: 13, margin: '0 0 8px' }}>
+                  {t('collectFrom')}: {settings.collection_address}
+                </p>
+              )}
+              <PickupSlots slots={slots} value={pickupAt} onChange={setPickupAt} />
+            </>
+          ) : (
+            <>
+              <label>Delivery address *</label>
+              <textarea rows="3" value={address} onChange={(e) => setAddress(e.target.value)} />
+              <label>Postcode *</label>
+              <input
+                value={postcode}
+                onChange={(e) => setPostcode(e.target.value.toUpperCase())}
+                placeholder="e.g. SW1A 1AA"
+              />
+              {quoting && <div className="muted" style={{ fontSize: 13 }}>Checking delivery…</div>}
+              {quote && (
+                <div className="quote-ok">
+                  {quote.label} — £{Number(quote.fee).toFixed(2)} <span className="muted">({quote.zone})</span>
+                </div>
+              )}
+              {quoteErr && <div className="err">{quoteErr}</div>}
+            </>
+          )}
 
           <label className="row" style={{ marginTop: 12, gap: 8 }}>
             <input
@@ -278,7 +389,7 @@ function CheckoutForm() {
                 <tr key={i.key}>
                   <td>
                     {i.name} × {i.qty}
-                    {i.options?.length > 0 && <div className="line-opts">{i.options.map((o) => o.name).join(', ')}</div>}
+                    <LineOptions list={i.options} />
                   </td>
                   <td style={{ textAlign: 'right', verticalAlign: 'top' }}>£{(i.price * i.qty).toFixed(2)}</td>
                 </tr>
@@ -288,9 +399,9 @@ function CheckoutForm() {
                 <td style={{ textAlign: 'right' }}>£{subtotal.toFixed(2)}</td>
               </tr>
               <tr>
-                <td>{t('delivery')}</td>
+                <td>{collection ? t('collectionOpt') : t('delivery')}</td>
                 <td style={{ textAlign: 'right' }}>
-                  {quote ? `£${deliveryFee.toFixed(2)}` : <span className="muted">enter postcode</span>}
+                  {collection ? 'free' : quote ? `£${deliveryFee.toFixed(2)}` : <span className="muted">enter postcode</span>}
                 </td>
               </tr>
               <tr>

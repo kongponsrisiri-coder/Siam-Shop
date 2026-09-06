@@ -61,6 +61,7 @@ export default function TillScreen() {
   const [picking, setPicking] = useState(null); // product awaiting option choice
   const [search, setSearch] = useState('');
   const [payment, setPayment] = useState('cash');
+  const [fulfilment, setFulfilment] = useState('takeaway'); // takeaway | dine_in (SIAMSHOP-504)
   const [tendered, setTendered] = useState('');
   const [flash, setFlash] = useState(null); // {type, text}
   const [receipt, setReceipt] = useState(null);
@@ -145,6 +146,7 @@ export default function TillScreen() {
           qty: 1,
           stock_qty: p.stock_qty,
           track_stock: tracked(p),
+          kind: p.kind,
           option_ids: optionIds,
           options: describeSelection(p, optionIds),
         },
@@ -203,11 +205,13 @@ export default function TillScreen() {
       const sale = await api.createSale({
         items: basket.map((i) => ({ product_id: i.id, qty: i.qty, option_ids: i.option_ids })),
         payment_method: payment,
+        fulfilment,
         amount_tendered: payment === 'cash' && tendered !== '' ? Number(tendered) : undefined,
       });
       setReceipt(sale);
       setBasket([]);
       setTendered('');
+      setFulfilment('takeaway');
       setSearch('');
       await Promise.all([loadCatalogue(), loadSummary()]);
       scanRef.current?.focus();
@@ -272,6 +276,9 @@ export default function TillScreen() {
               >
                 <div className="till-product-name">{p.name}</div>
                 {p.name_th && <div className="muted" style={{ fontSize: 12 }}>{p.name_th}</div>}
+                {p.available_now === false && (
+                  <div className="avail-badge off">Menu: {p.availability_text}</div>
+                )}
                 <div className="till-product-foot">
                   <span className="price">{hasOptions(p) ? 'from ' : ''}{money(p.price)}</span>
                   {tracked(p) ? (
@@ -318,6 +325,13 @@ export default function TillScreen() {
             <span>Total</span>
             <span>{money(subtotal)}</span>
           </div>
+
+          {basket.some((i) => i.kind === 'food') && (
+            <div className="till-fulfil">
+              <button className={`btn ${fulfilment === 'takeaway' ? '' : 'secondary'}`} onClick={() => setFulfilment('takeaway')}>🥡 Take away</button>
+              <button className={`btn ${fulfilment === 'dine_in' ? '' : 'secondary'}`} onClick={() => setFulfilment('dine_in')}>🍽 Eat in</button>
+            </div>
+          )}
 
           <div className="till-pay">
             <div className="row" style={{ gap: 8 }}>

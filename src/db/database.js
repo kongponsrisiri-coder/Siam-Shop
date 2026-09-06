@@ -251,6 +251,16 @@ async function initDB() {
     // SIAMSHOP-502 — retail (shelf stock) vs food (made to order at the counter).
     await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS kind VARCHAR(20) NOT NULL DEFAULT 'retail'`);
 
+    // SIAMSHOP-503 — per-category availability windows (null = always).
+    await pool.query(`ALTER TABLE categories ADD COLUMN IF NOT EXISTS availability JSONB`);
+    // SIAMSHOP-504 — fulfilment: delivery | collection | dine_in | takeaway; pickup slot; ready-for-collection time.
+    await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS fulfilment VARCHAR(20) NOT NULL DEFAULT 'delivery'`);
+    await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS pickup_at TIMESTAMPTZ`);
+    await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS ready_at TIMESTAMPTZ`);
+    // SIAMSHOP-505 — counter prep state: null (new) | preparing | ready | done.
+    await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS prep_status VARCHAR(20)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_orders_prep ON orders(shop_id, created_at DESC) WHERE prep_status IS DISTINCT FROM 'done'`);
+
     // Helpful indexes for the hot paths.
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_products_shop ON products(shop_id, is_active)`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_orders_shop ON orders(shop_id, created_at DESC)`);

@@ -15,7 +15,7 @@ lunch box and a bag of rice in one basket (their Wix site can't), and the owner 
 sold" view. Built on the SiamShop stack (right-lane rule: it's a shop with a food counter, not
 a restaurant — no tables, no courses, no kitchen stations).
 
-**Author:** Joy · **Written:** 2026-09-06 · **Status:** proposed, awaiting Korakot's go.
+**Author:** Joy · **Written:** 2026-09-06 · **Status:** 501–505 BUILT 2026-09-06 on branch `siamshop-m5-options` (not merged); 506 = Wix importer ready, deploy waits on client inputs.
 
 ---
 
@@ -32,12 +32,12 @@ a restaurant — no tables, no courses, no kitchen stations).
 
 | # | Ticket | Depends on | Est. |
 |---|---|---|---|
-| SIAMSHOP-501 | Product options (size / toppings / add-ons) | — | 4–5 d |
-| SIAMSHOP-502 | Food items: `kind` flag + till honours `track_stock` (bug) | — | 0.5 d |
-| SIAMSHOP-503 | Availability windows (lunch 12–3, boba hours) | 502 | 1–1.5 d |
-| SIAMSHOP-504 | Click & Collect with pickup time + "Ready" notice | — | 2–3 d |
-| SIAMSHOP-505 | Prep screen for the counter (`/prep`) | 501, 502, 504 | 2 d |
-| SIAMSHOP-506 | Cha & Pinto onboarding: fork, brand, Wix import, menu build, go-live | all | 2–3 d |
+| SIAMSHOP-501 ✅ | Product options (size / toppings / add-ons) | — | done |
+| SIAMSHOP-502 ✅ | Food items: `kind` flag + till honours `track_stock` (bug) | — | done |
+| SIAMSHOP-503 ✅ | Availability windows (lunch 12–3, boba hours) | 502 | done |
+| SIAMSHOP-504 ✅ | Click & Collect with pickup time + "Ready" notice | — | done |
+| SIAMSHOP-505 ✅ | Prep screen for the counter (`/prep`) | 501, 502, 504 | done |
+| SIAMSHOP-506 ◐ | Cha & Pinto onboarding: fork, brand, Wix import, menu build, go-live | all | importer done; deploy needs client inputs |
 
 Total ≈ 12–15 working days. 501 + 502 first (data model); 503/504 can run in parallel; 505
 last before onboarding. Every DB change follows the CLAUDE.md rule: `ALTER TABLE … ADD COLUMN
@@ -269,3 +269,25 @@ reach the person cooking. Nothing does that today.
 4. Do they have a Stripe account, or do we help set one up?
 5. Card terminal in use today (so till "card" matches their settlement reports).
 6. How many staff need till/prep logins; one shared PIN or named accounts?
+
+---
+
+## Build notes (2026-09-06, Joy)
+
+- **Tests:** `scripts/test-m5-options.mjs` (34 checks, 501/502) and `scripts/test-m5-collect.mjs`
+  (44 checks, 503/504/505). Boot the server on :4999 against a throwaway local Postgres with
+  `ADMIN_PASSWORD=test-pass-123`, run both. Both green on the branch.
+- **Deviations from the spec:**
+  - 503 windows live on the **category** (as planned); the till shows a "Menu: Mon–Sat 12:00–15:00"
+    badge on out-of-window items but never blocks. Bank holidays = a comma list of dates in Settings
+    that use Sunday hours (no gov.uk feed). Shop-closed blocking only applies once opening hours
+    are configured, so Thann/main/Thai Tana behave exactly as before.
+  - 504 statuses: `pending → ready → completed` for collections (`ready_at`, one email on first
+    Ready). Till sales record `fulfilment = takeaway | dine_in` (an Eat-in toggle appears when the
+    basket has a food item). Online orders default to `delivery`.
+  - 505 uses `orders.prep_status` (null | preparing | ready | done). Ticket = paid (or till) order
+    from the last 12 h with ≥1 `kind='food'` line. Ready on a collection order is the same code path
+    as Admin → Ready (email once). Print = browser print of one ticket at 72 mm.
+  - 506: `scripts/import-wix.js <export.csv> [--apply] [--photos]` — dry run by default, matches by
+    SKU → `wix:<handleId>` → name, pulls the first Wix image into the DB with `--photos`. Fork,
+    Railway project, brand re-skin and menu build still need the client's files (see Open questions).

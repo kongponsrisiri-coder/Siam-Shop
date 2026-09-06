@@ -115,6 +115,11 @@ export default function ProductScreen() {
                 ? `${product.stock_qty} ${lang === 'th' ? 'ชิ้นในสต็อก' : 'in stock'}`
                 : product.kind === 'food' ? t('madeToOrder') : ''}
           </p>
+          {product.availability_text && (
+            <div className={`avail-badge ${product.available_now === false ? 'off' : ''}`} style={{ marginBottom: 8 }}>
+              {product.available_now === false ? `${t('notNow')} · ` : `${t('available')} `}{product.availability_text}
+            </div>
+          )}
 
           {withOptions && !out && (
             <OptionGroups product={product} value={optionIds} onChange={setOptionIds} lang={lang} />

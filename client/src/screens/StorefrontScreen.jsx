@@ -154,6 +154,11 @@ export default function StorefrontScreen() {
   function isOut(p) {
     return p.track_stock && Number(p.stock_qty) <= 0;
   }
+  // SIAMSHOP-503: outside its category window (e.g. lunch 12–3) — shown, not orderable now.
+  function isUnavailable(p) {
+    return p.available_now === false;
+  }
+  const closed = settings && settings.opening_hours && !settings.open_now;
 
   return (
     <div className="container">
@@ -180,6 +185,13 @@ export default function StorefrontScreen() {
           onChange={(e) => setQ(e.target.value)}
         />
       </div>
+
+      {closed && (
+        <div className="closed-banner">
+          ⏰ {t('closedNow')}{settings.next_open ? ` — ${t('opens')} ${settings.next_open}` : ''}.
+          {settings.collection_enabled && <> {t('collectionOk')}.</>}
+        </div>
+      )}
 
       <div className="cat-tabs">
         <button
@@ -208,8 +220,9 @@ export default function StorefrontScreen() {
       <div className="grid">
         {visible.map((p) => {
           const out = isOut(p);
+          const unavail = !out && isUnavailable(p);
           return (
-            <div className={`card ${out ? 'is-out' : ''}`} key={p.id}>
+            <div className={`card ${out ? 'is-out' : ''} ${unavail ? 'is-unavail' : ''}`} key={p.id}>
               <Link
                 to={`/product/${p.id}`}
                 className="thumb"
@@ -231,8 +244,15 @@ export default function StorefrontScreen() {
                   {hasOptions(p) && <small className="muted" style={{ fontWeight: 400 }}>{lang === 'th' ? 'เริ่ม ' : 'from '}</small>}
                   £{Number(p.price).toFixed(2)}
                 </div>
+                {p.availability_text && (
+                  <div className={`avail-badge ${unavail ? 'off' : ''}`}>
+                    {unavail ? `${t('notNow')} · ` : ''}{p.availability_text}
+                  </div>
+                )}
                 {out ? (
                   <NotifyMe productId={p.id} />
+                ) : unavail && !settings?.collection_enabled ? (
+                  <button className="btn add-btn" disabled>{t('notNow')}</button>
                 ) : (
                   <QtyStepper product={p} />
                 )}

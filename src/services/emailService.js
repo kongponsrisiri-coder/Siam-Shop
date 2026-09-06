@@ -101,21 +101,34 @@ function trackButton(statusUrl) {
     </p>`;
 }
 
+// Collection (Click & Collect) vs delivery line for the templates (SIAMSHOP-504).
+function fulfilmentBlock(order, verb = 'Delivering to') {
+  if (order.fulfilment === 'collection') {
+    return `<p style="font-size:14px;">
+      <strong>Collection${order.pickup_label ? ` — ${esc(order.pickup_label)}` : ''}</strong>
+      ${order.collection_address ? `<br>${esc(order.collection_address)}` : ''}
+    </p>`;
+  }
+  return order.delivery_address ? `<p style="font-size:14px;">${verb}:<br>${esc(order.delivery_address)}</p>` : '';
+}
+
 // Payment-confirmed receipt. Sent when payment is confirmed — instantly for card,
 // or when the shop marks a bank transfer as received. statusUrl is optional.
 function sendOrderConfirmation(customerEmail, shopName, order, statusUrl) {
+  const collection = order.fulfilment === 'collection';
   const html = `
     <div style="font-family:Arial,sans-serif;max-width:560px;margin:0 auto;color:#222;">
       <h2>Payment received — your order is confirmed ✅</h2>
-      <p>${esc(shopName)} has confirmed your order <strong>#${esc(order.id)}</strong>. We'll let you know when it's dispatched.</p>
+      <p>${esc(shopName)} has confirmed your order <strong>#${esc(order.id)}</strong>.
+        ${collection ? "We'll email you when it's ready to collect." : "We'll let you know when it's dispatched."}</p>
       ${itemsTable(order.items)}
       <hr style="border:none;border-top:1px solid #eee;margin:12px 0;">
       <p style="font-size:14px;">
         Subtotal: ${money(order.subtotal)}<br>
-        Delivery: ${money(order.delivery_fee)}<br>
+        ${collection ? '' : `Delivery: ${money(order.delivery_fee)}<br>`}
         <strong>Total: ${money(order.total)}</strong>
       </p>
-      ${order.delivery_address ? `<p style="font-size:14px;">Delivering to:<br>${esc(order.delivery_address)}</p>` : ''}
+      ${fulfilmentBlock(order)}
       ${trackButton(statusUrl)}
       <p style="color:#888;font-size:12px;">SiamShop · Thai groceries, delivered.</p>
     </div>`;
@@ -137,7 +150,7 @@ function sendBankTransferInstructions(customerEmail, shopName, order, bankDetail
         <pre style="white-space:pre-wrap;font-family:inherit;margin:8px 0;font-size:14px;">${esc(bankDetails || 'Please contact the shop for bank details.')}</pre>
         Please use <strong>order #${esc(order.id)}</strong> as the payment reference.
       </div>
-      ${order.delivery_address ? `<p style="font-size:14px;">Delivering to:<br>${esc(order.delivery_address)}</p>` : ''}
+      ${fulfilmentBlock(order)}
       ${trackButton(statusUrl)}
       <p style="color:#888;font-size:12px;">SiamShop · Thai groceries, delivered.</p>
     </div>`;
@@ -171,13 +184,27 @@ function sendDispatchNotification(customerEmail, shopName, order, statusUrl, car
 function sendShopNotification(shopEmail, shopName, order) {
   const html = `
     <div style="font-family:Arial,sans-serif;max-width:560px;margin:0 auto;color:#222;">
-      <h2>New order #${esc(order.id)}</h2>
+      <h2>New order #${esc(order.id)}${order.fulfilment === 'collection' ? ' — COLLECTION' : ''}</h2>
       ${itemsTable(order.items)}
       <p style="font-size:14px;"><strong>Total: ${money(order.total)}</strong></p>
-      ${order.delivery_address ? `<p style="font-size:14px;">Deliver to:<br>${esc(order.delivery_address)}</p>` : ''}
+      ${fulfilmentBlock(order, 'Deliver to')}
       ${order.notes ? `<p style="font-size:14px;">Notes: ${esc(order.notes)}</p>` : ''}
     </div>`;
   return sendBrevoEmail(shopEmail, `New order #${order.id} — ${shopName}`, html);
+}
+
+// "Ready to collect" (SIAMSHOP-504). order = { id, collection_address, pickup_label }
+function sendOrderReady(customerEmail, shopName, order, statusUrl) {
+  const html = `
+    <div style="font-family:Arial,sans-serif;max-width:560px;margin:0 auto;color:#222;">
+      <h2>Your order is ready to collect 🛍️</h2>
+      <p>${esc(shopName)} has your order <strong>#${esc(order.id)}</strong> ready${order.pickup_label ? ` for your ${esc(order.pickup_label)} pickup` : ''}.</p>
+      ${order.collection_address ? `<p style="font-size:14px;">Collect from:<br>${esc(order.collection_address)}</p>` : ''}
+      <p style="font-size:14px;">Please quote your order number at the counter.</p>
+      ${trackButton(statusUrl)}
+      <p style="color:#888;font-size:12px;">SiamShop</p>
+    </div>`;
+  return sendBrevoEmail(customerEmail, `Order #${order.id} is ready to collect — ${shopName}`, html);
 }
 
 // Report the current email configuration (for the admin diagnostics tool).
@@ -191,5 +218,5 @@ function getEmailConfig() {
 
 module.exports = {
   sendBrevoEmail, sendOrderConfirmation, sendBankTransferInstructions,
-  sendDispatchNotification, sendShopNotification, getEmailConfig,
+  sendDispatchNotification, sendShopNotification, sendOrderReady, getEmailConfig,
 };

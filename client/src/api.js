@@ -65,6 +65,7 @@ export const api = {
     request(`/api/products/${id}/notify`, { method: 'POST', body: { email } }),
   deliveryQuote: (postcode) =>
     request('/api/delivery-quote', { method: 'POST', body: { postcode } }),
+  pickupSlots: () => request('/api/pickup-slots'),
   assistant: (messages, basket) =>
     request('/api/assistant', { method: 'POST', body: { messages, basket } }),
   checkoutSession: (body) =>
@@ -148,6 +149,13 @@ export const api = {
     request(`/api/admin/orders/${id}/mark-paid`, { method: 'POST', authed: true }),
   adminCancelOrder: (id) =>
     request(`/api/admin/orders/${id}/cancel`, { method: 'POST', authed: true }),
+  // SIAMSHOP-504 — Click & Collect lifecycle
+  adminMarkReady: (id) => request(`/api/admin/orders/${id}/ready`, { method: 'POST', authed: true }),
+  adminMarkCollected: (id) => request(`/api/admin/orders/${id}/collected`, { method: 'POST', authed: true }),
+  // SIAMSHOP-505 — counter prep screen
+  prepList: () => request('/api/prep', { authed: true }),
+  prepStatus: (id, prep_status) =>
+    request(`/api/prep/${id}/status`, { method: 'POST', body: { prep_status }, authed: true }),
   // CSV export — fetch with the auth header and return a Blob to download.
   exportOrdersCsv: async () => {
     const res = await fetch(`${API_BASE}/api/admin/orders.csv`, {
