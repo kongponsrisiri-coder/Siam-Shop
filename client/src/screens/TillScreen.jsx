@@ -39,6 +39,8 @@ export default function TillScreen() {
       const t = await api.tillSession();
       setTill(t);
       if (!t.session) setTillModal((m) => (m === 'dismissed' ? m : 'open'));
+      // Auto-opened by a sale with no float recorded yet → ask once.
+      else if (t.session.auto_opened && Number(t.session.float_amount) === 0) setTillModal((m) => (m === 'dismissed' || m === 'close' ? m : 'float'));
     } catch { /* ignore */ }
   }
   const [search, setSearch] = useState('');
@@ -247,7 +249,7 @@ export default function TillScreen() {
         )}
         {till && (till.session ? (
           <button className="btn secondary" style={{ marginLeft: 12 }} onClick={() => setTillModal('close')} title={`Open since ${new Date(till.session.opened_at).toLocaleTimeString()} · float £${Number(till.session.float_amount).toFixed(2)}`}>
-            🧮 Close till
+            🧮 Close till{till.session.auto_opened && Number(till.session.float_amount) === 0 ? ' · set float' : ''}
           </button>
         ) : (
           <button className="btn" style={{ marginLeft: 12 }} onClick={() => setTillModal('open')}>🔓 Open till</button>
@@ -395,6 +397,7 @@ export default function TillScreen() {
 
       {postOpen && <PostalOrders onClose={() => setPostOpen(false)} />}
       {tillModal === 'open' && <OpenTillModal onOpened={(t) => { setTill(t); setTillModal(null); showFlash('ok', 'Till open'); }} onClose={() => setTillModal('dismissed')} />}
+      {tillModal === 'float' && <OpenTillModal mode="float" onOpened={(t) => { setTill(t); setTillModal(null); showFlash('ok', 'Float saved'); }} onClose={() => setTillModal('dismissed')} />}
       {tillModal === 'close' && till?.session && (
         <CloseTillModal summary={till.summary} onClose={() => setTillModal(null)} onClosed={() => { setTillModal(null); setTill({ session: null }); loadSummary(); }} />
       )}

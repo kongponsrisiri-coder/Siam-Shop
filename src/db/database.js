@@ -305,6 +305,8 @@ async function initDB() {
       )
     `);
     await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_till_sessions_open ON till_sessions(shop_id) WHERE status = 'open'`);
+    // Opened automatically by the first sale of the day (no float yet) — Till prompts for the float.
+    await pool.query(`ALTER TABLE till_sessions ADD COLUMN IF NOT EXISTS auto_opened BOOLEAN NOT NULL DEFAULT FALSE`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_till_sessions_shop ON till_sessions(shop_id, opened_at DESC)`);
     await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS session_id INTEGER REFERENCES till_sessions(id) ON DELETE SET NULL`);
     await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS refunded_at TIMESTAMPTZ`);

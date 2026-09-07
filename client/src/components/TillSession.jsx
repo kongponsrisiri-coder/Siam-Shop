@@ -8,14 +8,16 @@ import ManagerPin from './ManagerPin.jsx';
 const money = (n) => '£' + Number(n || 0).toFixed(2);
 const when = (d) => (d ? new Date(d).toLocaleString('en-GB', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : '—');
 
-export function OpenTillModal({ onOpened, onClose }) {
+// mode 'open' = start a shift; mode 'float' = the shift auto-opened on the first
+// sale, so just record the float that was in the drawer.
+export function OpenTillModal({ onOpened, onClose, mode = 'open' }) {
   const [float, setFloat] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   async function open() {
     setBusy(true); setError('');
     try {
-      const r = await api.tillOpen(Number(float || 0));
+      const r = mode === 'float' ? await api.tillSetFloat(Number(float || 0)) : await api.tillOpen(Number(float || 0));
       onOpened(r);
     } catch (e) {
       // Someone else opened it meanwhile — just load it.
@@ -26,12 +28,16 @@ export function OpenTillModal({ onOpened, onClose }) {
   return (
     <div className="till-modal" onClick={onClose}>
       <div className="till-receipt" onClick={(e) => e.stopPropagation()}>
-        <h2 style={{ marginTop: 0 }}>Open the till</h2>
-        <p className="muted" style={{ marginTop: 0, fontSize: 13 }}>Count the cash in the drawer to start the shift. Sales from now on are reconciled against it at cash-up.</p>
+        <h2 style={{ marginTop: 0 }}>{mode === 'float' ? 'Shift started — set your float' : 'Open the till'}</h2>
+        <p className="muted" style={{ marginTop: 0, fontSize: 13 }}>
+          {mode === 'float'
+            ? 'The first sale opened this shift automatically. Enter the cash that was in the drawer at the start so the cash-up adds up.'
+            : 'Count the cash in the drawer to start the shift. Sales from now on are reconciled against it at cash-up.'}
+        </p>
         <label>Opening float (£)</label>
         <input type="number" inputMode="decimal" step="0.01" min="0" value={float} onChange={(e) => setFloat(e.target.value)} placeholder="50.00" autoFocus />
         {error && <p className="err">{error}</p>}
-        <button className="btn" style={{ width: '100%', marginTop: 12 }} disabled={busy} onClick={open}>{busy ? 'Opening…' : 'Open till'}</button>
+        <button className="btn" style={{ width: '100%', marginTop: 12 }} disabled={busy} onClick={open}>{busy ? 'Saving…' : mode === 'float' ? 'Save float' : 'Open till'}</button>
         <button className="btn ghost" style={{ width: '100%', marginTop: 6 }} onClick={onClose}>Not now</button>
       </div>
     </div>

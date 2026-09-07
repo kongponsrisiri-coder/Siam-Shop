@@ -1830,11 +1830,26 @@ app.post('/api/sales', requireAuth, async (req, res) => {
       change = +(tendered - total).toFixed(2);
     }
 
-    // Stamp the open till session (SIAMSHOP-TILL-001) so the Z can reconcile the drawer.
-    const { rows: sess } = await client.query(
-      `SELECT id FROM till_sessions WHERE shop_id = $1 AND status = 'open' ORDER BY opened_at DESC LIMIT 1`, [shopId]
+    // Every paid till sale belongs to a session (SIAMSHOP-TILL-001, Krit's review):
+    // if nobody opened the till yet, AUTO-OPEN one with float 0 — never block a
+    // queue, never leave cash outside a Z. The Till then asks for the float.
+    let { rows: sess } = await client.query(
+      `SELECT id, auto_opened, float_amount FROM till_sessions WHERE shop_id = $1 AND status = 'open' ORDER BY opened_at DESC LIMIT 1`, [shopId]
     );
+    let sessionAutoOpened = false;
+    if (!sess[0]) {
+      const ins = await client.query(
+        `INSERT INTO till_sessions (shop_id, opened_by, opened_by_sid, float_amount, auto_opened)
+         VALUES ($1,$2,$3,0,TRUE)
+         ON CONFLICT (shop_id) WHERE status = 'open' DO NOTHING
+         RETURNING id, auto_opened, float_amount`,
+        [shopId, staff, req.auth?.sid || null]
+      );
+      if (ins.rows[0]) { sess = ins.rows; sessionAutoOpened = true; }
+      else ({ rows: sess } = await client.query(`SELECT id, auto_opened, float_amount FROM till_sessions WHERE shop_id = $1 AND status = 'open' LIMIT 1`, [shopId]));
+    }
     const sessionId = sess[0]?.id || null;
+    const sessionNeedsFloat = !!sess[0]?.auto_opened && Number(sess[0]?.float_amount) === 0;
     const orderRes = await client.query(
       `INSERT INTO orders (shop_id, channel, status, subtotal, total, payment_method,
                            amount_tendered, change_given, staff, payment_status, fulfilled_at, fulfilment, session_id)
@@ -1874,6 +1889,8 @@ app.post('/api/sales', requireAuth, async (req, res) => {
       fulfilment,
       staff,
       session_id: sessionId,
+      session_auto_opened: sessionAutoOpened,
+      session_needs_float: sessionNeedsFloat,
       amount_tendered: tendered,
       change_given: change,
       created_at: orderRes.rows[0].created_at,
@@ -2149,7 +2166,7 @@ app.get('/api/admin/orders', requireAuth, async (req, res) => {
       `SELECT o.id, o.channel, o.source, o.status, o.payment_status, o.payment_method,
               o.subtotal, o.delivery_fee, o.total, o.created_at, o.fulfilled_at,
               o.dispatch_date, o.tracking_number,
-              o.fulfilment, o.pickup_at, o.ready_at, o.prep_status, o.label_printed_at,
+              o.fulfilment, o.pickup_at, o.ready_at, o.prep_status, o.label_printed_at, o.session_id,
               c.name AS customer_name, c.email AS customer_email
        FROM orders o
        LEFT JOIN customers c ON c.id = o.customer_id
@@ -2568,6 +2585,27 @@ app.post('/api/till/session/open', requireAuth, async (req, res) => {
     if (err.code === '23505') { const ex = await openSession(await resolveShopId(req)); return res.status(409).json({ error: 'The till is already open', session: ex }); }
     console.error('[till/session open]', err.message);
     res.status(500).json({ error: 'Failed to open the till' });
+  }
+});
+// Set / correct the opening float on the OPEN session (after an auto-open, or a typo). Cashier ok.
+app.put('/api/till/session/float', requireAuth, async (req, res) => {
+  try {
+    const shopId = await resolveShopId(req);
+    if (!shopId) return res.status(404).json({ error: 'Shop not found' });
+    const float = Number(req.body?.float_amount);
+    if (!Number.isFinite(float) || float < 0 || float > 100000) return res.status(400).json({ error: 'Enter the opening float (£)' });
+    const { rows } = await pool.query(
+      `UPDATE till_sessions SET float_amount = $3, auto_opened = FALSE,
+              opened_by = COALESCE(opened_by, $4)
+       WHERE shop_id = $1 AND status = 'open' AND id = (SELECT id FROM till_sessions WHERE shop_id = $2 AND status = 'open' LIMIT 1)
+       RETURNING *`,
+      [shopId, shopId, +float.toFixed(2), req.auth?.name || 'Owner']
+    );
+    if (!rows[0]) return res.status(409).json({ error: 'No till session is open' });
+    res.json({ session: rows[0], summary: await sessionSummary(shopId, rows[0]) });
+  } catch (err) {
+    console.error('[till/session float]', err.message);
+    res.status(500).json({ error: 'Failed to set the float' });
   }
 });
 // Close = cash-up. Manager or owner only. Snapshots the Z onto the session.
