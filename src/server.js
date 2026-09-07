@@ -331,9 +331,11 @@ async function upsertCustomer(client, shopId, customer) {
        phone = COALESCE(EXCLUDED.phone, customers.phone),
        -- Checkout tick = consent given online (source + time kept for GDPR). It never
        -- undoes an unsubscribe: unsubscribed_at stays and keeps them ineligible.
-       marketing_consent = EXCLUDED.marketing_consent,
-       consent_source = CASE WHEN EXCLUDED.marketing_consent <> customers.marketing_consent THEN 'online' ELSE customers.consent_source END,
-       consent_at = CASE WHEN EXCLUDED.marketing_consent <> customers.marketing_consent THEN NOW() ELSE customers.consent_at END
+       marketing_consent = CASE WHEN customers.unsubscribed_at IS NOT NULL THEN FALSE ELSE EXCLUDED.marketing_consent END,
+       consent_source = CASE WHEN customers.unsubscribed_at IS NOT NULL THEN customers.consent_source
+                             WHEN EXCLUDED.marketing_consent <> customers.marketing_consent THEN 'online' ELSE customers.consent_source END,
+       consent_at = CASE WHEN customers.unsubscribed_at IS NOT NULL THEN customers.consent_at
+                         WHEN EXCLUDED.marketing_consent <> customers.marketing_consent THEN NOW() ELSE customers.consent_at END
      RETURNING id`,
     [shopId, email, customer?.name || null, customer?.phone || null, Boolean(customer?.marketing_consent)]
   );
@@ -1402,9 +1404,9 @@ app.post('/api/account/register', authLimiter, async (req, res) => {
       // Existing customer (from a past order) claiming their account.
       ({ rows: [{ id: cid }] } = await pool.query(
         `UPDATE customers SET password_hash = $3, name = COALESCE($4, name), phone = COALESCE($5, phone),
-                marketing_consent = $6,
-                consent_source = CASE WHEN $6 <> marketing_consent THEN 'online' ELSE consent_source END,
-                consent_at = CASE WHEN $6 <> marketing_consent THEN NOW() ELSE consent_at END
+                marketing_consent = CASE WHEN unsubscribed_at IS NOT NULL THEN FALSE ELSE $6 END,
+                consent_source = CASE WHEN unsubscribed_at IS NOT NULL THEN consent_source WHEN $6 <> marketing_consent THEN 'online' ELSE consent_source END,
+                consent_at = CASE WHEN unsubscribed_at IS NOT NULL THEN consent_at WHEN $6 <> marketing_consent THEN NOW() ELSE consent_at END
          WHERE id = $1 AND shop_id = $2 RETURNING id`,
         [ex[0].id, shopId, hashPassword(password), req.body?.name || null, req.body?.phone || null, Boolean(req.body?.marketing_consent)]
       ));
@@ -1481,10 +1483,11 @@ app.put('/api/account', requireCustomer, async (req, res) => {
     const consent = req.body?.marketing_consent != null ? Boolean(req.body.marketing_consent) : null;
     const { rows } = await pool.query(
       `UPDATE customers SET name = COALESCE($2, name), phone = $3,
-              marketing_consent = COALESCE($4, marketing_consent),
-              consent_source = CASE WHEN $4 IS NULL THEN consent_source ELSE 'online' END,
-              consent_at = CASE WHEN $4 IS NULL THEN consent_at ELSE NOW() END,
-              unsubscribed_at = CASE WHEN $4 = TRUE THEN NULL ELSE unsubscribed_at END,
+              -- An unsubscribed customer stays unsubscribed (Krit, CRM review): only a
+              -- manager's recorded re-opt-in (PUT /consent) brings them back.
+              marketing_consent = CASE WHEN unsubscribed_at IS NOT NULL THEN FALSE ELSE COALESCE($4, marketing_consent) END,
+              consent_source = CASE WHEN unsubscribed_at IS NOT NULL OR $4 IS NULL THEN consent_source ELSE 'online' END,
+              consent_at = CASE WHEN unsubscribed_at IS NOT NULL OR $4 IS NULL THEN consent_at ELSE NOW() END,
               birthday = CASE WHEN $6 THEN NULL ELSE COALESCE($5, birthday) END
        WHERE id = $1 RETURNING id, name, email, phone, marketing_consent, birthday`,
       [req.customer.cid, req.body?.name != null ? String(req.body.name) : null,

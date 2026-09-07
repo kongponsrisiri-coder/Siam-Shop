@@ -115,6 +115,21 @@ r = await req('PUT', `/api/admin/customers/${lapsedC.id}/consent`, { consent: tr
 check('re-opt-in by a manager clears the unsubscribe', r.status === 200 && r.data.unsubscribed_at === null && r.data.marketing_consent === true);
 await req('GET', `/api/unsubscribe?token=${encodeURIComponent(token)}`, null, null, true); // unsubscribe again for the tests below
 
+console.log('— unsubscribe is sticky (Krit): checkout / register / account cannot flip consent back on');
+r = await req('POST', '/api/orders', { items: [{ product_id: rice.id, qty: 3 }], postcode: 'SW1A 1AA', delivery_address: 'x', customer: { email: 'lapsed@crm.test', name: 'Crm Lapsed', marketing_consent: true } });
+check('checkout with the box ticked accepted (order created)', !!r.data?.order_id, r.data);
+let sticky = (await req('GET', `/api/admin/customers/${lapsedC.id}`, null, mgrTok)).data;
+check('…but consent stays FALSE, source stays "unsubscribed", still ineligible', sticky.marketing_consent === false && sticky.consent_source === 'unsubscribed' && sticky.unsubscribed === true && sticky.eligible === false, { c: sticky.marketing_consent, s: sticky.consent_source });
+r = await req('POST', '/api/account/register', { email: 'lapsed@crm.test', password: 'pw123456', name: 'Crm Lapsed', marketing_consent: true });
+const lapsedTok = r.data?.token;
+sticky = (await req('GET', `/api/admin/customers/${lapsedC.id}`, null, mgrTok)).data;
+check('guest → account registration with the box ticked keeps consent FALSE', r.status === 201 || r.status === 200 ? sticky.marketing_consent === false && sticky.consent_source === 'unsubscribed' : true, { status: r.status, c: sticky.marketing_consent });
+if (lapsedTok) {
+  await req('PUT', '/api/account', { marketing_consent: true }, lapsedTok);
+  sticky = (await req('GET', `/api/admin/customers/${lapsedC.id}`, null, mgrTok)).data;
+  check('account settings tick keeps consent FALSE too', sticky.marketing_consent === false && sticky.unsubscribed === true);
+}
+
 console.log('— birthday');
 r = await req('PUT', `/api/admin/customers/${nok.id}/birthday`, { birthday: '13-40' }, mgrTok);
 check('bad birthday → 400', r.status === 400);
