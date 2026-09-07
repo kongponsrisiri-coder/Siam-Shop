@@ -47,9 +47,21 @@ check('staff created', a?.id && b?.id);
 let r = await req('POST', '/api/clock/toggle', { pin: '0000' });
 check('unknown PIN → 401', r.status === 401);
 r = await req('POST', '/api/clock/toggle', { pin: '3131' });
-check('first toggle = IN', r.status === 200 && r.data.event_type === 'in' && r.data.name === 'Clock Ann', r.data);
+check('first toggle = IN', r.status === 200 && r.data.event_type === 'in' && r.data.name === 'Clock Ann' && r.data.repeated === false, r.data);
+const firstAt = r.data.event_at;
+r = await req('POST', '/api/clock/toggle', { pin: '3131' });
+check('double tap within 60 s → repeated:true, still IN, same event, nothing written', r.data.repeated === true && r.data.event_type === 'in' && r.data.event_at === firstAt, r.data);
 r = await req('POST', '/api/clock/toggle', { pin: '3232' });
 check('Bob IN', r.data.event_type === 'in');
+// Later toggles need the last event to be older than the 60 s debounce — age them via the DB.
+let age = async () => {};
+if (process.env.DATABASE_URL) {
+  const { Pool } = await import('pg');
+  const pool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: /sslmode=disable|localhost/.test(process.env.DATABASE_URL) ? false : { rejectUnauthorized: false } });
+  age = async () => { await pool.query(`UPDATE clock_events SET event_at = event_at - interval '2 minutes' WHERE staff_id IN ($1,$2)`, [a.id, b.id]); };
+  globalThis.__pool = pool;
+} else { console.log('  ⏭  without DATABASE_URL the in/out/in sequence cannot beat the 60 s debounce — skipping the rest'); console.log(`\n${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0); }
+await age();
 const mgr = (await req('POST', '/api/staff/login', { pin: '3232' })).data.token;
 const cashTok = (await req('POST', '/api/staff/login', { pin: '3131' })).data.token;
 r = await req('GET', '/api/clock/status', null, mgr);
@@ -57,7 +69,8 @@ check('status lists both as clocked in', r.status === 200 && r.data.some((x) => 
 r = await req('GET', '/api/clock/status', null, cashTok);
 check('cashier cannot read status → 403', r.status === 403);
 r = await req('POST', '/api/clock/toggle', { pin: '3131' });
-check('second toggle = OUT', r.data.event_type === 'out');
+check('second toggle (after 60 s) = OUT', r.data.event_type === 'out' && r.data.repeated === false, r.data);
+await age();
 r = await req('POST', '/api/clock/toggle', { pin: '3131' });
 check('third toggle = IN again', r.data.event_type === 'in');
 r = await req('GET', '/api/clock/status', null, mgr);
@@ -71,8 +84,7 @@ check('pairing on live data: 1 closed + 1 open shift', live && live.closedCount 
 
 if (process.env.DATABASE_URL) {
   console.log('— midnight crossing via back-dated events');
-  const { Pool } = await import('pg');
-  const pool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: /sslmode=disable|localhost/.test(process.env.DATABASE_URL) ? false : { rejectUnauthorized: false } });
+  const pool = globalThis.__pool;
   const shop = (await pool.query(`SELECT shop_id FROM staff WHERE id = $1`, [b.id])).rows[0].shop_id;
   await pool.query(`DELETE FROM clock_events WHERE staff_id = $1`, [b.id]);
   await pool.query(`INSERT INTO clock_events (shop_id, staff_id, event_type, event_at) VALUES ($1,$2,'in', NOW() - interval '1 day 2 hours'), ($1,$2,'out', NOW() - interval '22 hours')`, [shop, b.id]);

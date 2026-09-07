@@ -749,6 +749,7 @@ app.get('/api/staff/me', requireAuth, (req, res) => {
 // looks at the person's LAST event and records the opposite. Timesheets pair
 // in→out client-side (shared client/src/timesheet.js) so the maths is testable.
 // ---------------------------------------------------------------------------
+const CLOCK_DEBOUNCE_MS = 60 * 1000;
 app.post('/api/clock/toggle', pinLimiter, async (req, res) => {
   try {
     const shopId = await resolveShopId(req);
@@ -762,13 +763,19 @@ app.post('/api/clock/toggle', pinLimiter, async (req, res) => {
     const hit = rows.find((s) => verifyPassword(pin, s.pin_hash));
     if (!hit) return res.status(401).json({ error: 'PIN not recognised' });
     const last = await pool.query(
-      `SELECT event_type FROM clock_events WHERE staff_id = $1 ORDER BY event_at DESC, id DESC LIMIT 1`, [hit.id]
+      `SELECT event_type, event_at FROM clock_events WHERE staff_id = $1 ORDER BY event_at DESC, id DESC LIMIT 1`, [hit.id]
     );
+    // Debounce (Krit, PR #4): a double tap inside 60 s must not flip in→out —
+    // that leaves a 0-minute shift and someone who thinks they're clocked in.
+    // Return the existing event instead so the card says "Already clocked IN".
+    if (last.rows[0] && Date.now() - new Date(last.rows[0].event_at).getTime() < CLOCK_DEBOUNCE_MS) {
+      return res.json({ ok: true, repeated: true, staff_id: hit.id, name: hit.name, event_type: last.rows[0].event_type, event_at: last.rows[0].event_at });
+    }
     const next = last.rows[0]?.event_type === 'in' ? 'out' : 'in';
     const { rows: ev } = await pool.query(
       `INSERT INTO clock_events (shop_id, staff_id, event_type) VALUES ($1,$2,$3) RETURNING event_at`, [shopId, hit.id, next]
     );
-    res.json({ ok: true, staff_id: hit.id, name: hit.name, event_type: next, event_at: ev[0].event_at });
+    res.json({ ok: true, repeated: false, staff_id: hit.id, name: hit.name, event_type: next, event_at: ev[0].event_at });
   } catch (err) {
     console.error('[clock/toggle]', err.message);
     res.status(500).json({ error: 'Clock in/out failed' });

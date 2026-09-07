@@ -119,7 +119,8 @@ export default function StaffGate({ need = 'staff', title = 'Staff sign in', onI
           <div className="clock-done">
             <div style={{ fontSize: 42 }}>{clocked.event_type === 'in' ? '🟢' : '🔴'}</div>
             <h2 style={{ margin: '6px 0' }}>{clocked.name}</h2>
-            <p style={{ margin: 0 }}>Clocked <strong>{clocked.event_type === 'in' ? 'IN' : 'OUT'}</strong> at {new Date(clocked.event_at).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}</p>
+            <p style={{ margin: 0 }}>{clocked.repeated ? 'Already clocked' : 'Clocked'} <strong>{clocked.event_type === 'in' ? 'IN' : 'OUT'}</strong> at {new Date(clocked.event_at).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}</p>
+            {clocked.repeated && <p className="muted" style={{ margin: '4px 0 0', fontSize: 12 }}>No change made — you tapped twice within a minute.</p>}
           </div>
         ) : mode === 'pin' || mode === 'clock' ? (
           <>
