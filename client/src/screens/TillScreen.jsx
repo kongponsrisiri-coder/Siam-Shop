@@ -9,6 +9,7 @@ import { OpenTillModal, CloseTillModal } from '../components/TillSession.jsx';
 import DiscountModal from '../components/DiscountModal.jsx';
 import ManagerPin from '../components/ManagerPin.jsx';
 import { isElectron, electronConfig, desktop } from '../electron.js';
+import { createScanCapture, stripScanFromInput, isTextTarget, SUFFIX_KEYS } from '../scanner.js';
 import { describeSelection, hasOptions, lineKey, unitPrice } from '../options.js';
 
 // In-store EPOS till (SIAMSHOP-103). Staff scan a barcode or search by name to
@@ -178,10 +179,37 @@ export default function TillScreen() {
     api.tillVoid({ product_id: line.id, name: line.name, qty: line.qty, amount: +(lineNet(line)).toFixed(2), reason }).catch(() => {});
   }
 
-  // Scan box: on Enter, try an exact barcode lookup; if no match, leave the text
-  // as a name filter for the catalogue list below.
+  // Barcode scanner anywhere on the screen (SIAMSHOP-DEVICE-001 D2): a fast
+  // keystroke burst ending in the scanner's suffix is a scan even when the
+  // focus is in another box (tendered amount, a modal…) — it goes to the
+  // basket and is stripped from wherever it landed. The scan input keeps its
+  // own handler below; this listener skips events that come from it.
+  const scannerCfg = electronConfig.scanner || { suffix: 'enter', captureAnywhere: true };
+  useEffect(() => {
+    if (!authed || scannerCfg.captureAnywhere === false) return undefined;
+    const cap = createScanCapture({
+      suffix: scannerCfg.suffix || 'enter',
+      onScan: async (code, meta) => {
+        if (meta.target && meta.target !== scanRef.current) stripScanFromInput(meta.target, code);
+        try { const p = await api.lookupBarcode(code); addProduct(p); showFlash('ok', `Scanned ${p.name}`); }
+        catch { showFlash('err', `No product with barcode ${code}`); }
+      },
+    });
+    const onKey = (e) => {
+      if (e.target === scanRef.current) return; // the scan box handles its own keys
+      cap.handleKey({ key: e.key, now: performance.now(), target: isTextTarget(e.target) ? e.target : null, ctrlKey: e.ctrlKey, metaKey: e.metaKey, altKey: e.altKey, preventDefault: () => e.preventDefault() });
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authed, scannerCfg.suffix, scannerCfg.captureAnywhere]);
+
+  // Scan box: on the scanner's suffix key (Enter, or Tab for some scanners),
+  // try an exact barcode lookup; if no match, leave the text as a name filter.
   async function onScanKey(e) {
-    if (e.key !== 'Enter') return;
+    const suffixKey = SUFFIX_KEYS[scannerCfg.suffix] || 'Enter';
+    if (e.key !== 'Enter' && e.key !== suffixKey) return;
+    if (e.key === 'Tab') e.preventDefault();
     const code = search.trim();
     if (!code) return;
     try {
@@ -258,6 +286,7 @@ export default function TillScreen() {
       footer: st.receipt_footer || '',
       vatNote: st.vat_number ? `VAT No. ${st.vat_number}` : '',
       copies: copies ?? st.receipt_copies ?? 1,
+      logo: st.brand_logo || '', showLogo: !!st.receipt_show_logo, // SIAMSHOP-DEVICE-001 D4
       orderId: sale.id,
       staff: sale.staff || staffSession.get()?.name || '',
       createdAt: sale.created_at,

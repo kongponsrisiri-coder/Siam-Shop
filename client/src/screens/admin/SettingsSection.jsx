@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { api } from '../../api.js';
 import { receiptPreview } from '../../receiptPreview.js';
+import BrandCard from '../../components/BrandCard.jsx';
 
 // Editable fields driven by adminGetSettings / adminUpdateSettings. Values are
 // returned/saved as strings (backend contract).
@@ -267,6 +268,8 @@ export default function SettingsSection() {
           </div>
         </form>
       )}
+
+      {!loading && form && <BrandCard settings={form} onSaved={(s) => setForm((f) => ({ ...f, ...s }))} />}
 
       <div className="panel">
         <h3 style={{ marginTop: 0 }}>Shop</h3>

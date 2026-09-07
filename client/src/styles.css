@@ -2,10 +2,12 @@
    Thai Gold + Deep Navy + Action Red. --siam-red is kept as the name for the
    primary action colour so existing rules adopt the brand without churn. */
 :root {
-  --navy: #0D1B3E;        /* Deep Navy — navbar, headers, prices, totals */
-  --gold: #C9A84C;        /* Thai Gold — accents, highlights, hovers */
-  --siam-red: #e94560;    /* Action Red — primary buttons, active states */
-  --siam-gold: #C9A84C;   /* alias kept for existing rules */
+  /* Per-shop brand (SIAMSHOP-DEVICE-001): theme.js sets --brand-primary /
+     --brand-accent on <html>; the defaults are the SiamShop CI colours. */
+  --navy: var(--brand-primary, #0D1B3E);   /* Deep Navy — navbar, headers, prices, totals */
+  --gold: var(--brand-accent, #C9A84C);    /* Thai Gold — accents, highlights, hovers */
+  --siam-red: #e94560;    /* Action Red — primary buttons, active states (never themed) */
+  --siam-gold: var(--brand-accent, #C9A84C);   /* alias kept for existing rules */
   --ink: #1f2328;
   --muted: #6b7280;
   --line: #e5e7eb;
@@ -520,7 +522,7 @@ th { color: var(--muted); font-weight: 600; }
 }
 
 /* ---- Staff sign-in (SIAMSHOP-ELECTRON-001) ---- */
-.gate { min-height: 100vh; display: flex; align-items: center; justify-content: center; background: linear-gradient(135deg, #0D1B3E 0%, #15275a 100%); padding: 20px; }
+.gate { min-height: 100vh; display: flex; align-items: center; justify-content: center; background: linear-gradient(135deg, var(--navy) 0%, color-mix(in srgb, var(--navy) 88%, #ffffff) 100%); padding: 20px; }
 .gate-card { background: #fff; border-radius: 16px; padding: 24px 24px 18px; width: 360px; max-width: 94vw; text-align: center; box-shadow: 0 20px 60px rgba(0,0,0,0.35); }
 .gate-brand { display: flex; justify-content: center; }
 .pin-dots { display: flex; justify-content: center; gap: 10px; margin: 10px 0 14px; }
@@ -542,3 +544,19 @@ th { color: var(--muted); font-weight: 600; }
 
 /* ---- Receipt settings preview (SIAMSHOP-RECEIPT-001) ---- */
 .receipt-preview { font-family: 'SF Mono', Menlo, Consolas, monospace; font-size: 11px; line-height: 1.35; background: #fff; border: 1px dashed var(--line); border-radius: 8px; padding: 12px 14px; margin: 0; white-space: pre; width: 42ch; box-sizing: content-box; }
+
+/* SIAMSHOP-DEVICE-001 — This device cards + brand card */
+.device-card { display: flex; align-items: center; gap: 14px; padding: 12px 14px; border: 1px solid var(--line); border-radius: 12px; background: #fff; }
+.device-card .device-icon { font-size: 28px; }
+.device-card .device-main { flex: 1; min-width: 0; }
+.device-card .device-title { font-weight: 700; }
+.device-card .device-sub { color: var(--muted); font-size: 13px; }
+.scan-list { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.scan-hit { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 12px; border: 1px solid var(--line); border-radius: 10px; background: #fff; }
+.scan-hit.on { border-color: var(--gold); background: #fff8e1; }
+.brand-swatch { width: 34px; height: 34px; border-radius: 8px; border: 1px solid var(--line); }
+.brand-preset { display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 999px; background: #fff; cursor: pointer; font-size: 13px; }
+.brand-preset .dot { width: 12px; height: 12px; border-radius: 50%; display: inline-block; }
+.brand-logo-preview { max-height: 72px; max-width: 260px; display: block; }
+.brand-logo-dark { background: var(--navy); padding: 10px 14px; border-radius: 10px; display: inline-block; }
+.test-scan-box { font-size: 20px; letter-spacing: 1px; font-family: ui-monospace, Menlo, monospace; }

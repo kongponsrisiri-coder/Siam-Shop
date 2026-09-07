@@ -1030,6 +1030,11 @@ app.get('/api/shop', async (req, res) => {
 });
 
 // Public shop settings the storefront needs (min order, delivery fees, restock).
+// Brand settings validation (SIAMSHOP-DEVICE-001): plain hex colours and a
+// small base64 image data URL (≤ 400 KB) — nothing else is stored.
+const BRAND_HEX = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i;
+const LOGO_DATA_URL = /^data:image\/(png|jpeg|webp|gif|svg\+xml);base64,[A-Za-z0-9+/=]+$/;
+const isLogoDataUrl = (v) => typeof v === 'string' && v.length <= 400000 && LOGO_DATA_URL.test(v);
 app.get('/api/settings', async (req, res) => {
   try {
     const shopId = await resolveShopId(req);
@@ -1054,6 +1059,11 @@ app.get('/api/settings', async (req, res) => {
       receipt_footer: s.receipt_footer || '',
       vat_number: s.vat_number || '',
       receipt_copies: Math.min(3, Math.max(1, parseInt(s.receipt_copies, 10) || 1)),
+      receipt_show_logo: s.receipt_show_logo === '1' || s.receipt_show_logo === 'true',
+      // SIAMSHOP-DEVICE-001 — per-shop brand (theme.js applies; Logo swaps).
+      brand_primary: BRAND_HEX.test(s.brand_primary || '') ? s.brand_primary : '',
+      brand_accent: BRAND_HEX.test(s.brand_accent || '') ? s.brand_accent : '',
+      brand_logo: isLogoDataUrl(s.brand_logo) ? s.brand_logo : '',
       // SIAMSHOP-503/504 — hours + collection (null hours = always open).
       timezone: ctx.tz,
       opening_hours: ctx.hours,
@@ -1866,6 +1876,12 @@ app.put('/api/admin/settings', requireAuth, async (req, res) => {
     if (!shopId) return res.status(404).json({ error: 'Shop not found' });
     const updates = req.body || {};
     for (const [key, value] of Object.entries(updates)) {
+      if ((key === 'brand_primary' || key === 'brand_accent') && value !== '' && !BRAND_HEX.test(String(value))) {
+        return res.status(400).json({ error: `${key} must be a hex colour like #0D1B3E` });
+      }
+      if (key === 'brand_logo' && value !== '' && !isLogoDataUrl(String(value))) {
+        return res.status(400).json({ error: 'Logo must be a PNG/JPEG/WebP image under 400 KB' });
+      }
       await pool.query(
         `INSERT INTO shop_settings (shop_id, key, value) VALUES ($1,$2,$3)
          ON CONFLICT (shop_id, key) DO UPDATE SET value = EXCLUDED.value`,

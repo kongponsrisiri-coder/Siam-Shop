@@ -111,9 +111,13 @@ function buildReceipt(r) {
   const anyDiscount = basketDisc || Number(r.discount_amount) > 0;
   const FULFIL = { dine_in: 'EAT IN', takeaway: 'TAKE AWAY', collection: 'COLLECTION', delivery: 'DELIVERY' };
   const pay = String(r.payment_method || '').toUpperCase();
+  // Logo (SIAMSHOP-DEVICE-001 D4): a ready GS v 0 raster from raster.js (main
+  // process decodes the image). Emitted once, centred, above the shop name.
+  const logo = r.logoRaster && Buffer.isBuffer(r.logoRaster) ? r.logoRaster : (r.logoRaster && r.logoRaster.type === 'Buffer' ? Buffer.from(r.logoRaster.data) : null);
   return flatten([
     CMD.INIT,
     CMD.ALIGN_CENTER,
+    logo ? [logo, lf()] : [],
     CMD.BOLD_ON, CMD.SIZE_BIG, txt(String(r.shopName || 'SiamShop').slice(0, 20)), CMD.SIZE_NORMAL, CMD.BOLD_OFF, lf(),
     (r.header || r.address) ? String(r.header || r.address).split(/\r?\n/).flatMap((line) => wrap(line, LINE_WIDTH).map((l) => [txt(l), lf()])) : [],
     lf(),
@@ -455,4 +459,4 @@ async function testPrint(printer) {
   await sendRaw(d.ip, d.port, buildTestPage({ ip: d.ip, port: d.port, name: d.printerName }), { printerName: d.printerName, lprQueue: d.lprQueue, lprPort: d.lprPort });
 }
 
-module.exports = { printReceipt, openCashDrawer, testPrint, printZReport, buildReceipt, buildZReport, buildTestPage, findCupsQueueForIp, LINE_WIDTH, CMD };
+module.exports = { printReceipt, openCashDrawer, testPrint, printZReport, buildReceipt, buildZReport, buildTestPage, findCupsQueueForIp, LINE_WIDTH, CMD, raster: require('./raster') };
