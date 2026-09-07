@@ -256,7 +256,7 @@ function printerLabel(p) {
   const model = String(opts['printer-make-and-model'] || p.description || '').trim();
   const display = String(p.displayName || '').trim();
   const queue = String(p.name || '');
-  const looksLikeQueue = !display || display === queue || /^_?\d{1,3}(_\d{1,3}){3}$/.test(display);
+  const looksLikeQueue = !display || display === queue || /^_?\d{1,3}([._]\d{1,3}){3}$/.test(display); // "_192_168_68_54" or "192.168.68.54"
   const label = (!looksLikeQueue && display) || model || queue;
   const uri = String(opts['device-uri'] || '');
   return { label, model, queue, uri };
@@ -509,10 +509,17 @@ function createWindow() {
       }
       setTimeout(async () => {
         try {
+          // Optional: press a button by its text before the capture (e.g. "Find printers")
+          // and wait for it to finish — lets the canary exercise a real IPC path.
+          if (process.env.SIAMSHOP_CANARY_CLICK_TEXT) {
+            const clicked = await mainWindow.webContents.executeJavaScript(`(() => { const t = ${JSON.stringify(process.env.SIAMSHOP_CANARY_CLICK_TEXT)}; const b = [...document.querySelectorAll('button')].find((x) => x.textContent.includes(t)); if (b) b.click(); return !!b; })()`, true);
+            console.log('[canary] clicked', JSON.stringify(process.env.SIAMSHOP_CANARY_CLICK_TEXT), clicked);
+            await new Promise((r) => setTimeout(r, Number(process.env.SIAMSHOP_CANARY_CLICK_WAIT_MS) || 8000));
+          }
           const diag = await mainWindow.webContents.executeJavaScript(`(async () => {
             const tok = localStorage.getItem('siamshop_admin_token') || '';
             let me = null; try { const r = await fetch((window.electron?.config?.cloudApiUrl || '') + '/api/admin/me?shop=' + (window.electron?.config?.shopSlug || ''), { headers: { Authorization: 'Bearer ' + tok } }); me = r.status + ' ' + (await r.text()).slice(0, 80); } catch (e) { me = 'ERR ' + e.message; }
-            return { href: location.href, hasToken: !!tok, staff: localStorage.getItem('siamshop_staff'), me, text: document.body.innerText.slice(0, 160).split(String.fromCharCode(10)).join(' / ') };
+            return { href: location.href, hasToken: !!tok, staff: localStorage.getItem('siamshop_staff'), me, text: document.body.innerText.slice(0, Number(${JSON.stringify(process.env.SIAMSHOP_CANARY_TEXT_LEN || '160')})).split(String.fromCharCode(10)).join(' / ') };
           })()`, true);
           console.log('[canary] diag:', JSON.stringify(diag));
           const img = await mainWindow.capturePage();
