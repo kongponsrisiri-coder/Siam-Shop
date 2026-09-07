@@ -55,9 +55,6 @@ a:hover { text-decoration: underline; }
 .navlinks a { font-weight: 600; color: rgba(255, 255, 255, 0.9); }
 .navlinks a:hover { color: var(--gold); text-decoration: none; }
 /* Subtle staff shortcuts, separated from the customer links */
-.staff-links { display: inline-flex; align-items: center; gap: 12px; padding-left: 12px; border-left: 1px solid rgba(255, 255, 255, 0.2); }
-.navlinks .staff-link { font-size: 13px; font-weight: 600; color: rgba(255, 255, 255, 0.55); }
-.navlinks .staff-link:hover { color: var(--gold); }
 .lang-toggle { margin-left: 0; }
 
 /* Buttons */
