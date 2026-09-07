@@ -3,6 +3,7 @@ import { api } from '../../api.js';
 import { maskName, maskEmail, maskAddress } from '../../demo.js';
 import { isElectron } from '../../electron.js';
 import PrintLabelButton from '../../components/PrintLabelButton.jsx';
+import PrintReceiptButton from '../../components/PrintReceiptButton.jsx';
 
 // Clear, combined payment + fulfilment state for the list.
 function orderState(o) {
@@ -158,7 +159,8 @@ function OrderDetail({ id, onBack, onChanged }) {
             <div>{maskName(cust.name || order.customer_name || '—', order.id)}</div>
             {(cust.email || order.customer_email) && <div className="muted">{maskEmail(cust.email || order.customer_email, order.id)}</div>}
             {(cust.phone || order.customer_phone) && <div className="muted">{cust.phone || order.customer_phone}</div>}
-            {order.fulfilment === 'collection' ? (
+            {order.channel === 'instore' && <div style={{ flex: '1 1 100%' }}><PrintReceiptButton order={order} /></div>}
+          {order.fulfilment === 'collection' ? (
               <div style={{ marginTop: 6 }}>
                 🛍️ Pickup: <strong>{order.pickup_at ? new Date(order.pickup_at).toLocaleString() : 'ASAP'}</strong>
                 {order.ready_at && <div className="muted">Ready since {new Date(order.ready_at).toLocaleTimeString()}</div>}

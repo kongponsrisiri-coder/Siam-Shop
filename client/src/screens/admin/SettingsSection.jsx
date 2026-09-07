@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { api } from '../../api.js';
+import { receiptPreview } from '../../receiptPreview.js';
 
 // Editable fields driven by adminGetSettings / adminUpdateSettings. Values are
 // returned/saved as strings (backend contract).
@@ -130,6 +131,10 @@ export default function SettingsSection() {
       patch.collection_address = form.collection_address ?? '';
       patch.pickup_lead_minutes = String(Number(form.pickup_lead_minutes) || 20);
       patch.pickup_slot_minutes = String(Number(form.pickup_slot_minutes) || 15);
+      patch.receipt_header = form.receipt_header ?? '';
+      patch.receipt_footer = form.receipt_footer ?? '';
+      patch.vat_number = form.vat_number ?? '';
+      patch.receipt_copies = String(Math.min(3, Math.max(1, parseInt(form.receipt_copies, 10) || 1)));
       const updated = await api.adminUpdateSettings(patch);
       setForm(updated || form);
       setSaved(true);
@@ -182,6 +187,30 @@ export default function SettingsSection() {
               </select>
             </div>
           </div>
+          <h3 style={{ marginTop: 20 }}>Receipt</h3>
+          <p className="muted" style={{ marginTop: 0, fontSize: 13 }}>Printed on every till receipt (80 mm, 42 characters per line). The preview updates as you type.</p>
+          <div className="row" style={{ gap: 16, flexWrap: 'wrap', alignItems: 'flex-start' }}>
+            <div style={{ flex: '1 1 280px' }}>
+              <label>Header (address, phone — one line each)</label>
+              <textarea rows="3" value={form.receipt_header ?? ''} onChange={(e) => set('receipt_header', e.target.value)} placeholder={'16 London Rd, Guildford GU1 2AF\n01483 599499'} />
+              <label>Footer</label>
+              <input value={form.receipt_footer ?? ''} onChange={(e) => set('receipt_footer', e.target.value)} placeholder="Thank you for shopping with us!" />
+              <div className="row" style={{ gap: 12, flexWrap: 'wrap' }}>
+                <div style={{ flex: '2 1 160px' }}>
+                  <label>VAT number (blank = not shown)</label>
+                  <input value={form.vat_number ?? ''} onChange={(e) => set('vat_number', e.target.value)} placeholder="GB 123 4567 89" />
+                </div>
+                <div style={{ flex: '1 1 100px' }}>
+                  <label>Copies per sale</label>
+                  <select value={form.receipt_copies ?? '1'} onChange={(e) => set('receipt_copies', e.target.value)}>
+                    <option value="1">1</option><option value="2">2</option><option value="3">3</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+            <pre className="receipt-preview" style={{ flex: '0 0 auto' }}>{receiptPreview({ shopName: shop?.name || 'SiamShop', header: form.receipt_header, footer: form.receipt_footer, vatNumber: form.vat_number })}</pre>
+          </div>
+
           <h3 style={{ marginTop: 20 }}>Opening hours</h3>
           <p className="muted" style={{ marginTop: 0, fontSize: 13 }}>
             Leave every day unticked to accept orders at any time. When set, the website stops taking

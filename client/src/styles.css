@@ -539,3 +539,6 @@ th { color: var(--muted); font-weight: 600; }
 
 /* ---- Clock in/out (SIAMSHOP-CLOCK-001) ---- */
 .clock-done { padding: 18px 0 8px; text-align: center; }
+
+/* ---- Receipt settings preview (SIAMSHOP-RECEIPT-001) ---- */
+.receipt-preview { font-family: 'SF Mono', Menlo, Consolas, monospace; font-size: 11px; line-height: 1.35; background: #fff; border: 1px dashed var(--line); border-radius: 8px; padding: 12px 14px; margin: 0; white-space: pre; width: 42ch; box-sizing: content-box; }

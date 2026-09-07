@@ -934,6 +934,11 @@ app.get('/api/settings', async (req, res) => {
       restock_day: s.restock_day || null,
       currency: s.currency || 'GBP',
       shop_language_default: s.shop_language_default || 'en',
+      // SIAMSHOP-RECEIPT-001 — printed on every till receipt (not secrets).
+      receipt_header: s.receipt_header || '',
+      receipt_footer: s.receipt_footer || '',
+      vat_number: s.vat_number || '',
+      receipt_copies: Math.min(3, Math.max(1, parseInt(s.receipt_copies, 10) || 1)),
       // SIAMSHOP-503/504 — hours + collection (null hours = always open).
       timezone: ctx.tz,
       opening_hours: ctx.hours,

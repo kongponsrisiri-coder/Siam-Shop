@@ -194,6 +194,7 @@ export default function TillScreen() {
         amount_tendered: payment === 'cash' && tendered !== '' ? Number(tendered) : undefined,
       });
       setReceipt(sale);
+      setLastSale(sale);
       setBasket([]);
       setTendered('');
       setFulfilment('takeaway');
@@ -214,12 +215,20 @@ export default function TillScreen() {
   }
 
   const [printMsg, setPrintMsg] = useState('');
-  async function printReceipt(sale) {
+  const [lastSale, setLastSale] = useState(null); // SIAMSHOP-RECEIPT-001: reprint last receipt
+  const [shopSettings, setShopSettings] = useState(null);
+  useEffect(() => { if (authed) api.getSettings().then(setShopSettings).catch(() => {}); }, [authed]);
+  async function printReceipt(sale, { copies } = {}) {
     setPrintMsg('Printing…');
+    const st = shopSettings || {};
     const r = await desktop.printReceipt({
       shopName: electronConfig.shopName || 'SiamShop',
+      header: st.receipt_header || '',
+      footer: st.receipt_footer || '',
+      vatNote: st.vat_number ? `VAT No. ${st.vat_number}` : '',
+      copies: copies ?? st.receipt_copies ?? 1,
       orderId: sale.id,
-      staff: staffSession.get()?.name || '',
+      staff: sale.staff || staffSession.get()?.name || '',
       createdAt: sale.created_at,
       fulfilment: sale.fulfilment || fulfilment,
       items: (sale.items || []).map((it) => ({
@@ -254,6 +263,9 @@ export default function TillScreen() {
         ) : (
           <button className="btn" style={{ marginLeft: 12 }} onClick={() => setTillModal('open')}>🔓 Open till</button>
         ))}
+        {isElectron && lastSale && (
+          <button className="btn secondary" style={{ marginLeft: 8 }} onClick={() => printReceipt(lastSale, { copies: 1 })} title={`Reprint receipt #${lastSale.id}`}>🖨 Reprint last</button>
+        )}
         <button className="btn secondary" style={{ marginLeft: 8 }} onClick={() => setPostOpen(true)}>📦 Post</button>
         <Link to="/admin" className="btn secondary" style={{ marginLeft: 8 }}>Admin</Link>
       </div>
@@ -426,7 +438,7 @@ export default function TillScreen() {
             )}
             {isElectron && (
               <div className="row" style={{ gap: 8, marginTop: 12 }}>
-                <button className="btn secondary" style={{ flex: 1 }} onClick={() => printReceipt(receipt)}>🖨 Print receipt</button>
+                <button className="btn secondary" style={{ flex: 1 }} onClick={() => printReceipt(receipt, { copies: 1 })}>🖨 Print receipt</button>
                 <button className="btn secondary" onClick={() => desktop.kickDrawer()}>💵 Drawer</button>
               </div>
             )}
