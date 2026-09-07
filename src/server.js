@@ -806,10 +806,12 @@ app.post('/api/staff/approve', pinLimiter, async (req, res) => {
     } else {
       if (!PIN_RE.test(pin)) return res.status(400).json({ error: 'Enter the manager PIN' });
       const { rows } = await pool.query(
-        `SELECT id, name, pin_hash, role FROM staff WHERE shop_id = $1 AND active = TRUE AND (pin_lookup = $2 OR pin_lookup IS NULL)`,
+        `SELECT id, name, pin_hash, role, must_change_pin FROM staff WHERE shop_id = $1 AND active = TRUE AND (pin_lookup = $2 OR pin_lookup IS NULL)`,
         [shopId, pinLookup(shopId, pin)]
       );
       const hit = rows.find((s) => verifyPassword(pin, s.pin_hash));
+      // An unchanged first-time PIN must never mint an approval (Krit, v0.1.4 review).
+      if (hit && hit.must_change_pin) return res.status(403).json({ error: 'Set your PIN before approving' });
       if (hit) who = { role: hit.role, name: hit.name, sid: hit.id, shop: shopId };
     }
     if (!who) return res.status(401).json({ error: 'PIN not recognised' });

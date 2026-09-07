@@ -38,6 +38,8 @@ r = await req('GET', '/api/admin/orders', null, firstTok);
 check('bootstrap token → GET /api/admin/orders 403 too (manager role does not help)', r.status === 403 && r.data.code === 'pin_change_required', r.data);
 r = await req('GET', '/api/staff/me', null, firstTok);
 check('bootstrap token → GET /api/staff/me allowed', r.status === 200);
+r = await req('POST', '/api/staff/approve', { pin: '2526' });
+check('unchanged first-time PIN cannot mint a manager approval → 403', r.status === 403, r.data);
 
 console.log('— forced change');
 r = await req('POST', '/api/staff/change-pin', { new_pin: '2526' }, firstTok);
@@ -60,6 +62,8 @@ check('sign in with 4820 → manager Korakot, no forced change', r.status === 20
 r = await req('POST', '/api/sales', { items: [{ product_id: prod.id, qty: 1 }], payment_method: 'cash' }, r.data.token);
 check('fresh 4820 token → sale 201', r.status === 201);
 await req('DELETE', `/api/admin/products/${prod.id}`, null, owner);
+r = await req('POST', '/api/staff/approve', { pin: '4820' });
+check('after the change, the manager PIN mints an approval → 200', r.status === 200 && r.data.token, r.data);
 r = await req('POST', '/api/staff/login', { pin: '2526' });
 check('2526 is dead once the shop has staff → 401', r.status === 401, r.data);
 r = await req('GET', '/api/staff/me', null, newTok);
