@@ -38,6 +38,18 @@ export function luminance(hex) {
 // Ink that stays legible on a brand colour, so a pale brand does not produce
 // white-on-cream buttons and a dark one does not produce black-on-navy.
 export function readableInk(hex) { return luminance(hex) > 0.5 ? '#1f2328' : '#ffffff'; }
+// WCAG contrast ratio, 1 (identical) to 21 (black on white).
+export function contrastRatio(a, b) {
+  const l1 = luminance(a), l2 = luminance(b);
+  const [hi, lo] = l1 > l2 ? [l1, l2] : [l2, l1];
+  return (hi + 0.05) / (lo + 0.05);
+}
+// A brand colour is also used as TEXT on white cards — headings, prices, tags.
+// A pale brand cannot do that job, so it steps aside for the normal ink rather
+// than printing cream on white (Korakot's demo shop is #fbf8f1).
+export function textOn(bg, brand, fallback = '#1f2328') {
+  return contrastRatio(brand, bg) >= 4.5 ? brand : fallback;
+}
 export function rgba(hex, alpha) {
   const { r, g, b } = hexToRgb(hex);
   return `rgba(${r}, ${g}, ${b}, ${alpha})`;
@@ -79,6 +91,16 @@ export function applyBrandTheme(settings) {
       for (const v of ['--brand-action', '--brand-action-ink', '--brand-tint']) root.style.removeProperty(v);
     }
     root.style.setProperty('--brand-accent-soft', rgba(state.accent, 0.3));
+    // Text that sits ON the brand primary (header links, hero wording). It was
+    // hard-coded white, which disappeared the moment a shop chose a light
+    // brand (Korakot, 7 Sep).
+    root.style.setProperty('--brand-on-primary', readableInk(state.primary));
+    // Text that sits on white and wants to be brand-coloured.
+    root.style.setProperty('--brand-text', textOn('#ffffff', state.primary));
+    // The accent over the primary — a pale accent on a pale header is the same
+    // problem again, so it steps aside for whatever reads on that header.
+    root.style.setProperty('--brand-accent-on-primary',
+      contrastRatio(state.accent, state.primary) >= 3 ? state.accent : readableInk(state.primary));
     try { window.dispatchEvent(new CustomEvent(EVENT, { detail: getBrand() })); } catch {}
   }
   return getBrand();

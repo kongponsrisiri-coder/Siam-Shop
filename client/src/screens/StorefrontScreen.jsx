@@ -168,11 +168,11 @@ export default function StorefrontScreen() {
         // over the brand primary, so any brand keeps the same depth.
         style={{
           background: 'linear-gradient(135deg, rgba(255,255,255,0) 0%, rgba(255,255,255,0.14) 100%), var(--navy)',
-          color: '#fff', border: 'none', borderBottom: '3px solid var(--gold)',
+          color: 'var(--on-primary)', border: 'none', borderBottom: '3px solid var(--on-primary-accent)',
         }}
       >
-        <h1 style={{ margin: 0, color: '#fff' }}>{shop?.name || 'SiamShop'}</h1>
-        <p style={{ margin: '6px 0 0', opacity: 0.92, color: 'var(--gold)' }}>
+        <h1 style={{ margin: 0, color: 'var(--on-primary)' }}>{shop?.name || 'SiamShop'}</h1>
+        <p style={{ margin: '6px 0 0', opacity: 0.92, color: 'var(--on-primary-accent)' }}>
           {lang === 'th' ? 'ของชำไทย ส่งถึงบ้านคุณ' : 'Thai groceries, delivered to your door.'}
         </p>
       </div>
