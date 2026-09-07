@@ -16,7 +16,7 @@
  * are intentionally NOT ported — SiamShop's counter uses the /prep screen and
  * the grocery receipt is Latin-only (Thai product names fall back to English).
  *
- * printer config: { ip, port (9100), name, lprQueue ('lp') }
+ * printer config: { ip, port (9100), name, lprQueue ('lp'), lprPort (515) }
  */
 
 'use strict';
@@ -341,20 +341,21 @@ const _transportCache = new Map(); // `${ip}:${port}` → 'lpr'
 function sendRaw(ip, port, buf, options = {}) {
   const explicitName = (options.printerName || '').trim();
   const lprQueue = (options.lprQueue || 'lp').trim();
+  const lprPort = parseInt(options.lprPort, 10) || 515;
   const hasTcp = !!ip;
   if (!hasTcp && !explicitName) return Promise.reject(new Error('No printer configured — set an IP or a printer name in Admin → This device.'));
   const job = async () => {
     if (hasTcp) {
       const cacheKey = `${ip}:${port}`;
       if (_transportCache.get(cacheKey) === 'lpr') {
-        try { return await _sendLpr(ip, 515, buf, lprQueue); }
+        try { return await _sendLpr(ip, lprPort, buf, lprQueue); }
         catch (cachedErr) { _transportCache.delete(cacheKey); console.warn(`[print] cached LPR route to ${ip} failed (${cachedErr.message}) — re-probing`); }
       }
       try { return await _sendTcp(ip, port, buf); }
       catch (rawErr) {
         try {
-          console.warn(`[print] RAW ${ip}:${port} failed (${rawErr.message}) — trying LPR 515 ('${lprQueue}')`);
-          const res = await _sendLpr(ip, 515, buf, lprQueue);
+          console.warn(`[print] RAW ${ip}:${port} failed (${rawErr.message}) — trying LPR ${lprPort} ('${lprQueue}')`);
+          const res = await _sendLpr(ip, lprPort, buf, lprQueue);
           _transportCache.set(cacheKey, 'lpr');
           return res;
         } catch (lprErr) {
@@ -381,19 +382,20 @@ function dest(printer = {}) {
     port: parseInt(printer.port, 10) || 9100,
     printerName: String(printer.name || '').trim(),
     lprQueue: String(printer.lprQueue || 'lp').trim(),
+    lprPort: parseInt(printer.lprPort, 10) || 515,
   };
 }
 async function printReceipt(printer, receipt) {
   const d = dest(printer);
-  await sendRaw(d.ip, d.port, buildReceipt(receipt), { printerName: d.printerName, lprQueue: d.lprQueue });
+  await sendRaw(d.ip, d.port, buildReceipt(receipt), { printerName: d.printerName, lprQueue: d.lprQueue, lprPort: d.lprPort });
 }
 async function openCashDrawer(printer) {
   const d = dest(printer);
-  await sendRaw(d.ip, d.port, CMD.DRAWER_KICK, { printerName: d.printerName, lprQueue: d.lprQueue });
+  await sendRaw(d.ip, d.port, CMD.DRAWER_KICK, { printerName: d.printerName, lprQueue: d.lprQueue, lprPort: d.lprPort });
 }
 async function testPrint(printer) {
   const d = dest(printer);
-  await sendRaw(d.ip, d.port, buildTestPage({ ip: d.ip, port: d.port, name: d.printerName }), { printerName: d.printerName, lprQueue: d.lprQueue });
+  await sendRaw(d.ip, d.port, buildTestPage({ ip: d.ip, port: d.port, name: d.printerName }), { printerName: d.printerName, lprQueue: d.lprQueue, lprPort: d.lprPort });
 }
 
-module.exports = { printReceipt, openCashDrawer, testPrint, buildReceipt, buildTestPage, findCupsQueueForIp };
+module.exports = { printReceipt, openCashDrawer, testPrint, buildReceipt, buildTestPage, findCupsQueueForIp, LINE_WIDTH, CMD };

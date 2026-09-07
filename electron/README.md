@@ -56,6 +56,16 @@ Example `config.json`:
 - The app runs in the tray when the window is closed; **Quit** from the tray or **Exit** on
   the sign-in screen.
 
+## Print path — what is verified and what is not
+- **Verified without hardware** (`node scripts/test-electron-print.mjs`, 22 checks): ESC/POS receipt
+  bytes (init, CP858 £, aligned columns, wrapping, TOTAL, payment line, cut), drawer-kick pulse,
+  RAW → LPR fallback and the transport cache, clear error when no printer is configured.
+- **Assumed trial setup:** a Mac + an Ethernet 80 mm ESC/POS printer (the way every restaurant
+  client runs). That is the RAW 9100 path above.
+- **Untested until a real device exists:** USB printer by name via CUPS (Mac) and the Windows
+  spooler RAW helper (cannot run on macOS). Treat both as best-effort ports of the restaurant code.
+- Thai text on paper is not supported yet — see `docs/tickets/SIAMSHOP-ELECTRON-002-thai-receipt.md`.
+
 ## Things Electron does differently (gotchas)
 - `window.prompt()` is disabled — the app uses forms/modals instead.
 - Client is built with base `./` and the hash router (`npm run build:electron-client` →
