@@ -2,6 +2,8 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api, auth, staffSession } from '../api.js';
 import { Logo } from '../components/Logo.jsx';
+import { isElectron, electronConfig } from '../electron.js';
+import { usePrepPrinting } from '../usePrepPrinting.js';
 import StaffGate, { StaffChip } from '../components/StaffGate.jsx';
 
 // Counter prep screen (SIAMSHOP-505). One column of tickets for every paid
@@ -102,6 +104,9 @@ export default function PrepScreen() {
   const [sound, setSound] = useState(true);
   const [printing, setPrinting] = useState(null);
   const seen = useRef(null); // Set of ids seen so far (null until first load)
+  // Prep printers (SIAMSHOP-PRINTERS-001): this device prints queued tickets; 🖨 reprints.
+  const prep = usePrepPrinting({ enabled: authed && isElectron });
+  const [reprintMsg, setReprintMsg] = useState('');
 
   useEffect(() => {
     if (!auth.get()) { setChecking(false); return; }
@@ -142,8 +147,19 @@ export default function PrepScreen() {
     }
   }
 
-  // Print one ticket: mark it, print, unmark. CSS hides everything else.
-  function printTicket(id) {
+  // Print one ticket. Desktop: reprint on the prep printer(s) via the queue
+  // (SIAMSHOP-PRINTERS-001). Browser: mark it, window.print(), unmark.
+  async function printTicket(id) {
+    if (isElectron) {
+      setReprintMsg('Reprinting…');
+      try {
+        const r = await api.prepReprint(id, electronConfig.deviceId);
+        await prep.printTickets(r.prep_tickets);
+        setReprintMsg(prep.lastError ? `Held — ${prep.lastError}` : 'Prep ticket reprinted');
+      } catch (e) { setReprintMsg(e.message); }
+      setTimeout(() => setReprintMsg(''), 4000);
+      return;
+    }
     setPrinting(id);
     setTimeout(() => {
       window.print();
@@ -154,6 +170,9 @@ export default function PrepScreen() {
   if (checking) return <div className="container center muted">Loading…</div>;
   if (!authed) return <StaffGate need="staff" title="Prep screen sign in" onIn={() => setAuthed(true)} />;
 
+  const heldBadge = isElectron && (prep.held > 0 || prep.lastError) ? (
+    <div className="till-flash err no-print">🍜 Prep printer offline — {prep.held || 1} ticket{(prep.held || 1) === 1 ? '' : 's'} held, retrying every 30 s{prep.lastError ? ` · ${prep.lastError}` : ''}</div>
+  ) : null;
   const queue = orders.filter((o) => o.prep_status !== 'ready');
   const ready = orders.filter((o) => o.prep_status === 'ready');
 
@@ -170,6 +189,8 @@ export default function PrepScreen() {
         <Link to="/till" className="btn secondary" style={{ marginLeft: 8 }}>Till</Link>
       </div>
       {error && <div className="till-flash err no-print">{error}</div>}
+      {heldBadge}
+      {reprintMsg && <div className="till-flash ok no-print">{reprintMsg}</div>}
 
       <div className="prep-cols">
         <section className="prep-col">

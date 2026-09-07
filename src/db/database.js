@@ -425,6 +425,47 @@ async function initDB() {
       )
     `);
 
+    // SIAMSHOP-PRINTERS-001 — shop-wide printers with jobs + exactly-once prep tickets.
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS printers (
+        id              SERIAL PRIMARY KEY,
+        shop_id         INTEGER NOT NULL REFERENCES shops(id) ON DELETE CASCADE,
+        name            VARCHAR(100) NOT NULL,
+        kind            VARCHAR(10) NOT NULL DEFAULT 'network',   -- network | usb
+        ip              VARCHAR(64),
+        port            INTEGER NOT NULL DEFAULT 9100,
+        lpr_queue       VARCHAR(64),
+        usb_name        VARCHAR(200),
+        model           VARCHAR(120),
+        job             VARCHAR(10) NOT NULL DEFAULT 'receipt',   -- receipt | prep | label
+        prep_categories INTEGER[] NOT NULL DEFAULT '{}',          -- prep only; empty = all made-to-order items
+        active          BOOLEAN NOT NULL DEFAULT TRUE,
+        last_test_at    TIMESTAMPTZ,
+        last_test_ok    BOOLEAN,
+        created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_printers_shop ON printers(shop_id, active)`);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS prep_tickets (
+        id               SERIAL PRIMARY KEY,
+        shop_id          INTEGER NOT NULL REFERENCES shops(id) ON DELETE CASCADE,
+        order_id         INTEGER NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+        printer_id       INTEGER NOT NULL REFERENCES printers(id) ON DELETE CASCADE,
+        seq              INTEGER NOT NULL DEFAULT 0,             -- 0 = original, 1.. = reprints
+        status           VARCHAR(10) NOT NULL DEFAULT 'queued',  -- queued | printing | printed | failed
+        origin_device_id VARCHAR(64),                            -- the till that took the payment (NULL = online)
+        device_id        VARCHAR(64),                            -- who claimed / printed it
+        attempts         INTEGER NOT NULL DEFAULT 0,
+        last_error       TEXT,
+        claimed_at       TIMESTAMPTZ,
+        printed_at       TIMESTAMPTZ,
+        created_at       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (shop_id, order_id, printer_id, seq)
+      )
+    `);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_prep_tickets_open ON prep_tickets(shop_id, status, created_at) WHERE status <> 'printed'`);
+
     // Helpful indexes for the hot paths.
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_products_shop ON products(shop_id, is_active)`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_orders_shop ON orders(shop_id, created_at DESC)`);

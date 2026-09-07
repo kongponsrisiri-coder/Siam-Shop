@@ -76,7 +76,10 @@ function loadConfig() {
     const p = getConfigPath();
     if (!fs.existsSync(p)) return null;
     // Strip a UTF-8 BOM (PowerShell `-Encoding UTF8` writes one; JSON.parse chokes).
-    return JSON.parse(fs.readFileSync(p, 'utf8').replace(/^﻿/, ''));
+    const cfg = JSON.parse(fs.readFileSync(p, 'utf8').replace(/^﻿/, ''));
+    // Stable per-install id (SIAMSHOP-PRINTERS-001): who claimed/printed a prep ticket.
+    if (cfg && !cfg.device_id) { cfg.device_id = require('crypto').randomUUID(); try { saveConfig(cfg); } catch (_) {} }
+    return cfg;
   } catch (err) {
     console.warn('[config] load failed:', err.message);
     return null;
@@ -95,6 +98,10 @@ function rendererConfig(cfg) {
     cloudApiUrl: c.cloud_api_url || '',
     shopSlug: c.shop_slug || '',
     labelPrinter: c.label_printer || '',
+    // SIAMSHOP-PRINTERS-001 — shop-wide printers live in the cloud; per device only:
+    deviceId: c.device_id || '',
+    receiptPrinterId: c.receipt_printer_id ? Number(c.receipt_printer_id) : null,
+    printingTill: !!c.printing_till,
     printer: {
       ip: c.printer?.ip || '', port: Number(c.printer?.port) || 9100, name: c.printer?.name || '',
       lprQueue: c.printer?.lprQueue || 'lp',
@@ -146,6 +153,8 @@ ipcMain.handle('siamshop:save-config', async (event, patch) => {
     if (patch.cloud_api_url != null) next.cloud_api_url = String(patch.cloud_api_url).trim().replace(/\/$/, '');
     if (patch.shop_slug != null) next.shop_slug = String(patch.shop_slug).trim();
     if (patch.label_printer != null) next.label_printer = String(patch.label_printer).trim();
+    if (patch.receipt_printer_id !== undefined) next.receipt_printer_id = patch.receipt_printer_id ? parseInt(patch.receipt_printer_id, 10) || null : null;
+    if (patch.printing_till != null) next.printing_till = !!patch.printing_till;
     if (patch.printer) {
       next.printer = {
         ...(cur.printer || {}),
@@ -189,7 +198,11 @@ ipcMain.handle('siamshop:reset-config', async () => {
 });
 
 // Printing — main process, ESC/POS over the network/USB (see printService.js).
-function printerCfg() { return rendererConfig().printer; }
+function printerCfg(dest) {
+  // Renderer-resolved printer (from the shop-wide list) wins; else this device's legacy printer block.
+  if (dest && (dest.ip || dest.name)) return { ip: dest.ip || '', port: dest.port || 9100, name: dest.name || '', lprQueue: dest.lprQueue || 'lp' };
+  return rendererConfig().printer;
+}
 // Receipt logo (SIAMSHOP-DEVICE-001 D4): brand logo data URL → nativeImage →
 // ≤384-dot-wide bitmap → GS v 0 via raster.js. Cached per logo content.
 const _logoCache = new Map(); // hash → Buffer
@@ -219,7 +232,7 @@ ipcMain.handle('siamshop:print-receipt', async (event, payload) => {
     const p = { ...(payload || {}) };
     if (p.showLogo && p.logo) p.logoRaster = logoRaster(p.logo, !!p.logoInvert);
     delete p.logo;
-    for (let i = 0; i < copies; i++) await printService.printReceipt(printerCfg(), p);
+    for (let i = 0; i < copies; i++) await printService.printReceipt(printerCfg(p.dest), p);
     return { ok: true, copies };
   } catch (e) {
     console.error('[print] receipt failed:', e.message);
@@ -228,14 +241,14 @@ ipcMain.handle('siamshop:print-receipt', async (event, payload) => {
 });
 ipcMain.handle('siamshop:print-z', async (event, payload) => {
   try {
-    await printService.printZReport(printerCfg(), payload?.z || {}, payload?.shopName || rendererConfig().shopName || 'SiamShop');
+    await printService.printZReport(printerCfg(payload?.dest), payload?.z || {}, payload?.shopName || rendererConfig().shopName || 'SiamShop');
     return { ok: true };
   } catch (e) {
     return { ok: false, error: e.message };
   }
 });
-ipcMain.handle('siamshop:kick-drawer', async () => {
-  try { await printService.openCashDrawer(printerCfg()); return { ok: true }; }
+ipcMain.handle('siamshop:kick-drawer', async (event, dest) => {
+  try { await printService.openCashDrawer(printerCfg(dest)); return { ok: true }; }
   catch (e) { return { ok: false, error: e.message }; }
 });
 function recordTest(ok) {
@@ -254,6 +267,18 @@ ipcMain.handle('siamshop:test-print', async (event, printer) => {
 });
 // "Find printers" (SIAMSHOP-DEVICE-001 D1): sweep the LAN for port-9100 responders.
 // If a CUPS queue points at a found IP, its driver name rides along as `model`.
+// Prep ticket (SIAMSHOP-PRINTERS-001) on a specific prep printer — never kicks the drawer.
+ipcMain.handle('siamshop:print-prep', async (event, payload) => {
+  try {
+    const { ticket, dest } = payload || {};
+    if (!ticket) return { ok: false, error: 'Nothing to print' };
+    if (!dest || !(dest.ip || dest.name)) return { ok: false, error: 'No prep printer' };
+    await printService.printPrepTicket(printerCfg(dest), ticket);
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
 ipcMain.handle('siamshop:scan-printers', async () => {
   try {
     const r = await printerScan.scanPrinters({});
@@ -331,7 +356,7 @@ ipcMain.handle('siamshop:print-label', async (event, payload) => {
   try {
     const { html, copies } = payload || {};
     if (!html) return { ok: false, error: 'Nothing to print' };
-    await printLabelHtml(html, { deviceName: rendererConfig().labelPrinter, copies });
+    await printLabelHtml(html, { deviceName: payload?.deviceName || rendererConfig().labelPrinter, copies });
     return { ok: true };
   } catch (e) {
     console.error('[label] print failed:', e.message);
@@ -590,9 +615,26 @@ function setupAutoUpdater() {
     autoUpdater.on('update-available', (info) => sendStatus({ state: 'available', version: info?.version }));
     autoUpdater.on('update-not-available', () => sendStatus({ state: 'not-available' }));
     autoUpdater.on('download-progress', (p) => sendStatus({ state: 'downloading', percent: Math.round(p?.percent || 0) }));
-    autoUpdater.on('error', (err) => sendStatus({ state: 'error', message: err?.message || String(err) }));
-    autoUpdater.on('update-downloaded', (info) => sendStatus({ state: 'downloaded', version: info?.version }));
+    // Network-ish failures (server unreachable, release being assembled → 404,
+    // DNS) get a friendly line + up to 3 retries at 10 min (Krit, v0.1.5 review:
+    // Korakot saw a raw net::ERR_FAILED while a release's assets were uploading).
+    let retries = 0;
+    const NETWORKISH = /ERR_FAILED|ERR_NAME_NOT_RESOLVED|ERR_INTERNET_DISCONNECTED|ERR_CONNECTION|ENOTFOUND|ECONNREFUSED|ETIMEDOUT|404|status code 4\d\d|status code 5\d\d|net::/i;
+    autoUpdater.on('error', (err) => {
+      const raw = err?.message || String(err);
+      if (NETWORKISH.test(raw) && retries < 3) {
+        retries++;
+        sendStatus({ state: 'error', message: 'Update server not reachable right now — will try again in 10 minutes.', retry_in_min: 10, raw });
+        setTimeout(() => autoUpdater.checkForUpdates().catch(() => {}), 10 * 60 * 1000).unref?.();
+      } else {
+        sendStatus({ state: 'error', message: NETWORKISH.test(raw) ? 'Update server not reachable — check the internet connection and press Check for updates.' : raw, raw });
+      }
+    });
+    autoUpdater.on('update-downloaded', (info) => { retries = 0; sendStatus({ state: 'downloaded', version: info?.version }); });
+    autoUpdater.on('update-not-available', () => { retries = 0; });
     autoUpdater.checkForUpdatesAndNotify().catch((err) => console.warn('[updater] check skipped:', err?.message || err));
+    // Tills stay open for days: look again every 4 hours (restaurant does the same).
+    setInterval(() => autoUpdater.checkForUpdates().catch(() => {}), 4 * 60 * 60 * 1000).unref?.();
   } catch (err) {
     console.warn('[updater] not initialised:', err?.message || err);
   }

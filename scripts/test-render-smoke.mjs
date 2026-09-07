@@ -41,8 +41,9 @@ const shim = (apiUrl, authed) => `<script>
 ${authed ? `try { localStorage.setItem('siamshop_admin_token', 'smoke-token'); localStorage.setItem('siamshop_staff', JSON.stringify({ name: 'Smoke Manager', role: 'manager', sid: 1 })); } catch (e) {}` : `try { localStorage.clear(); } catch (e) {}`}
 window.electron = {
   isElectron: true, platform: 'smoke',
-  config: { shopName: 'Smoke Shop', cloudApiUrl: '${apiUrl}', shopSlug: 'demo', printer: { ip: '', port: 9100, autoPrint: false, kickDrawerOnCash: false }, labelPrinter: '', scanner: { suffix: 'enter', captureAnywhere: true } },
-  getConfig: async () => ({ shopName: 'Smoke Shop', cloudApiUrl: '${apiUrl}', shopSlug: 'demo', printer: { ip: '', port: 9100, name: '', lprQueue: 'lp', autoPrint: true, kickDrawerOnCash: true }, scanner: { suffix: 'enter', captureAnywhere: true }, version: '0.0.0-smoke' }),
+  config: { shopName: 'Smoke Shop', cloudApiUrl: '${apiUrl}', shopSlug: 'demo', printer: { ip: '', port: 9100, autoPrint: false, kickDrawerOnCash: false }, labelPrinter: '', scanner: { suffix: 'enter', captureAnywhere: true }, deviceId: 'smoke-device', receiptPrinterId: 1, printingTill: true },
+  getConfig: async () => ({ shopName: 'Smoke Shop', cloudApiUrl: '${apiUrl}', shopSlug: 'demo', printer: { ip: '', port: 9100, name: '', lprQueue: 'lp', autoPrint: true, kickDrawerOnCash: true }, scanner: { suffix: 'enter', captureAnywhere: true }, deviceId: 'smoke-device', receiptPrinterId: 1, printingTill: true, version: '0.0.0-smoke' }),
+  printPrep: async () => ({ ok: true }),
   saveConfig: async () => ({ success: true }), readClipboard: async () => '', pickConfigFile: async () => null, resetConfig: () => {},
   printReceipt: async () => ({ ok: false, error: 'smoke' }), kickDrawer: async () => ({ ok: false }), printZ: async () => ({ ok: false }),
   testPrint: async () => ({ ok: false }), listPrinters: async () => [{ name: '_192_168_68_54', displayName: '_192_168_68_54', label: 'POS-80', model: 'POS-80', queue: '_192_168_68_54', isDefault: true }], printLabel: async () => ({ ok: false }),
@@ -82,6 +83,9 @@ const FAKE_API = {
   '/api/prep': { orders: [] },
   '/api/admin/dashboard': { counts: { products: 0, orders: 0, customers: 0, low_stock: 0, pending: 0, active_products: 0, out_of_stock: 0 }, sales: { day: { gross: 0, count: 0 }, week: { gross: 0, count: 0 }, month: { gross: 0, count: 0 }, all: { gross: 0, count: 0 } }, sales_7d: [], top_products: [], by_channel: [], low_stock: [], recent_orders: [] },
   '/api/refund-reasons': { refund: [], void: [], restock: [] },
+  '/api/printers': { printers: [{ id: 1, name: 'Front till', kind: 'network', ip: '10.0.0.50', port: 9100, job: 'receipt', prep_categories: [], active: true }, { id: 2, name: 'Kitchen', kind: 'network', ip: '10.0.0.51', port: 9100, job: 'prep', prep_categories: [], active: true }], printing_device_id: 'smoke-device' },
+  '/api/prep/print-queue': { device_id: 'smoke-device', designated: true, tickets: [], held: 0 },
+  '/api/prep/tickets': [],
   '/api/admin/campaigns/segments': { lapsed_days: 45, total: 0, eligible: 0, segments: [{ id: 'all', label: 'All consented', count: 0 }], categories: [], cap: { daily: 300, sent_today: 0, remaining: 300 } },
   '/api/admin/campaigns/recipient-count': { count: 0, cap: 300, sent_today: 0, remaining: 300 },
   '/api/admin/automations': { lapsed_days: 45, brevo_daily_cap: 300, automations: { lapsed: { enabled: false, subject: 's', body: 'b' }, review: { enabled: false, subject: 's', body: 'b' }, birthday: { enabled: false, subject: 's', body: 'b' } }, recent: [], defaults: {} },
@@ -92,7 +96,7 @@ function startFakeApi() {
   const srv = createServer((req, res) => {
     const p = req.url.split('?')[0];
     res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type');
+    res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type, X-Device-Id');
     res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS');
     if (req.method === 'OPTIONS') { res.writeHead(204); return res.end(); }
     res.setHeader('Content-Type', 'application/json');

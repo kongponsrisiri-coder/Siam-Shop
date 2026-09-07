@@ -10,6 +10,8 @@ import DiscountModal from '../components/DiscountModal.jsx';
 import ManagerPin from '../components/ManagerPin.jsx';
 import { isElectron, electronConfig, desktop } from '../electron.js';
 import { createScanCapture, stripScanFromInput, isTextTarget, SUFFIX_KEYS } from '../scanner.js';
+import { loadPrinters } from '../printers.js';
+import { usePrepPrinting } from '../usePrepPrinting.js';
 import { describeSelection, hasOptions, lineKey, unitPrice } from '../options.js';
 
 // In-store EPOS till (SIAMSHOP-103). Staff scan a barcode or search by name to
@@ -65,6 +67,10 @@ export default function TillScreen() {
   const [shopSettings, setShopSettings] = useState(null);
   useEffect(() => { if (authed) api.getSettings().then(setShopSettings).catch(() => {}); }, [authed]);
   const [voiding, setVoiding] = useState(null); // basket line awaiting a void reason (SIAMSHOP-REFUND-001)
+  // Printers (SIAMSHOP-PRINTERS-001): this till's receipt printer from the shop list;
+  // prep tickets print on the prep printers (own sales at once, queue polled).
+  const prep = usePrepPrinting({ enabled: authed && isElectron });
+  const receiptDest = async () => (await loadPrinters().catch(() => null))?.receiptDest || undefined;
   // Attach the sale to a customer (SIAMSHOP-CRM-001): phone / email / name lookup.
   const [customer, setCustomer] = useState(null); // { id, name, email, phone }
   const [custQ, setCustQ] = useState('');
@@ -275,8 +281,9 @@ export default function TillScreen() {
       // Desktop till (SIAMSHOP-ELECTRON-001): print + kick the drawer on cash.
       if (isElectron) {
         const pr = electronConfig.printer || {};
-        if (pr.kickDrawerOnCash !== false && sale.payment_method === 'cash') desktop.kickDrawer().catch(() => {});
+        if (pr.kickDrawerOnCash !== false && sale.payment_method === 'cash') receiptDest().then((d) => desktop.kickDrawer(d)).catch(() => {});
         if (pr.autoPrint !== false) printReceipt(sale);
+        if (sale.prep_tickets?.length) prep.printTickets(sale.prep_tickets); // kitchen / counter
       }
       await Promise.all([loadCatalogue(), loadSummary(), loadTill()]);
       scanRef.current?.focus();
@@ -293,6 +300,7 @@ export default function TillScreen() {
     setPrintMsg('Printing…');
     const st = shopSettings || {};
     const r = await desktop.printReceipt({
+      dest: await receiptDest(),
       shopName: electronConfig.shopName || 'SiamShop',
       header: st.receipt_header || '',
       footer: st.receipt_footer || '',
@@ -345,6 +353,9 @@ export default function TillScreen() {
       </div>
 
       {flash && <div className={`till-flash ${flash.type}`}>{flash.text}</div>}
+      {isElectron && (prep.held > 0 || prep.lastError) && (
+        <div className="till-flash err">🍜 Prep printer offline — {prep.held || 1} ticket{(prep.held || 1) === 1 ? '' : 's'} held, retrying{prep.lastError ? ` · ${prep.lastError}` : ''}</div>
+      )}
 
       <div className="till-grid">
         {/* LEFT: scan + catalogue */}
@@ -582,7 +593,7 @@ export default function TillScreen() {
             {isElectron && (
               <div className="row" style={{ gap: 8, marginTop: 12 }}>
                 <button className="btn secondary" style={{ flex: 1 }} onClick={() => printReceipt(receipt, { copies: 1 })}>🖨 Print receipt</button>
-                <button className="btn secondary" onClick={() => desktop.kickDrawer()}>💵 Drawer</button>
+                <button className="btn secondary" onClick={() => receiptDest().then((d) => desktop.kickDrawer(d))}>💵 Drawer</button>
               </div>
             )}
             {printMsg && <div className="muted" style={{ marginTop: 6, fontSize: 12 }}>{printMsg}</div>}

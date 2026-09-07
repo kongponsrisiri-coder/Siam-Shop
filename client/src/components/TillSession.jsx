@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { api, staffSession } from '../api.js';
 import { isElectron, desktop, electronConfig } from '../electron.js';
+import { loadPrinters } from '../printers.js';
 import ManagerPin from './ManagerPin.jsx';
 
 // Till session UI (SIAMSHOP-TILL-001): open the till with a float, close it
@@ -84,7 +85,7 @@ export function PrintZButton({ z, label = '🖨 Print Z' }) {
   if (!isElectron) return null;
   return (
     <span className="row" style={{ gap: 8, alignItems: 'center', display: 'inline-flex' }}>
-      <button className="btn secondary" onClick={async () => { setMsg('Printing…'); const r = await desktop.printZ(z, electronConfig.shopName); setMsg(r?.ok ? 'Printed' : `Print failed: ${r?.error}`); }}>{label}</button>
+      <button className="btn secondary" onClick={async () => { setMsg('Printing…'); const r = await desktop.printZ(z, electronConfig.shopName, (await loadPrinters().catch(() => null))?.receiptDest); setMsg(r?.ok ? 'Printed' : `Print failed: ${r?.error}`); }}>{label}</button>
       {msg && <span className="muted" style={{ fontSize: 12 }}>{msg}</span>}
     </span>
   );
@@ -106,7 +107,7 @@ export function CloseTillModal({ summary, onClosed, onClose }) {
     try {
       const r = await api.tillClose(Number(counted), notes, approvalToken);
       setResult(r.summary);
-      if (isElectron && electronConfig.printer?.autoPrint !== false) desktop.printZ(r.summary, electronConfig.shopName).catch(() => {});
+      if (isElectron && electronConfig.printer?.autoPrint !== false) loadPrinters().catch(() => null).then((p) => desktop.printZ(r.summary, electronConfig.shopName, p?.receiptDest)).catch(() => {});
     } catch (e) {
       setError(e.message);
     } finally { setBusy(false); }

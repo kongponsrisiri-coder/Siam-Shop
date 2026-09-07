@@ -1,8 +1,10 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { api } from '../../api.js';
 import { desktop, electronConfig } from '../../electron.js';
-import { buildLabelHtml, SAMPLE_LABEL } from '../../label.js';
 import { createScanCapture, SUFFIX_KEYS } from '../../scanner.js';
+import PrintersCard from '../../components/PrintersCard.jsx';
+import { resolvePrinters, printerDest, invalidatePrinters } from '../../printers.js';
+import { staffSession } from '../../api.js';
 
 // "This device" (desktop till only — SIAMSHOP-ELECTRON-001 / DEVICE-001):
 // receipt printer + drawer (found on the LAN, not typed), barcode scanner,
@@ -13,6 +15,12 @@ const fmtWhen = (iso) => (iso ? new Date(iso).toLocaleString('en-GB', { day: 'nu
 
 export default function DeviceSection() {
   const [cfg, setCfg] = useState(null);
+  // SIAMSHOP-PRINTERS-001 — shop-wide list; per device: receipt printer + printing-till flag.
+  const [shopPrinters, setShopPrinters] = useState(null); // { printers, printing_device_id }
+  const [tillMsg, setTillMsg] = useState('');
+  const me = staffSession.get();
+  const isManager = !me || me.role === 'manager' || me.role === 'admin';
+  const loadShopPrinters = () => api.printers().then(setShopPrinters).catch(() => setShopPrinters({ printers: [] }));
   const [printer, setPrinter] = useState(EMPTY_PRINTER);
   const [editing, setEditing] = useState(false); // saved printer shows as a card; "Change" opens the fields
   const [osPrinters, setOsPrinters] = useState([]);
@@ -20,8 +28,6 @@ export default function DeviceSection() {
   const [msg, setMsg] = useState('');
   const [busy, setBusy] = useState(false);
   const [update, setUpdate] = useState(null);
-  const [labelPrinter, setLabelPrinter] = useState('');
-  const [labelMsg, setLabelMsg] = useState('');
   // Barcode scanner (D2)
   const [scanner, setScanner] = useState({ suffix: 'enter', captureAnywhere: true });
   const [scannerMsg, setScannerMsg] = useState('');
@@ -35,15 +41,47 @@ export default function DeviceSection() {
       const p = { ...EMPTY_PRINTER, ...(c?.printer || {}) };
       setPrinter(p);
       setEditing(!(p.ip || p.name)); // fresh install → fields (empty); configured → card
-      setLabelPrinter(c?.labelPrinter || '');
       if (c?.scanner) setScanner({ suffix: c.scanner.suffix || 'enter', captureAnywhere: c.scanner.captureAnywhere !== false });
     }).catch(() => setEditing(true));
     desktop.listPrinters().then(setOsPrinters).catch(() => {});
+    loadShopPrinters();
     desktop.onUpdateStatus((s) => setUpdate(s));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const set = (k, v) => setPrinter((p) => ({ ...p, [k]: v }));
+  const resolved = shopPrinters ? resolvePrinters(shopPrinters, cfg || electronConfig) : null;
+  const receiptChoices = (shopPrinters?.printers || []).filter((p) => p.job === 'receipt' && p.active !== false);
+  const isPrintingTill = !!cfg?.deviceId && shopPrinters?.printing_device_id === cfg.deviceId;
+  async function chooseReceiptPrinter(id) {
+    setTillMsg('');
+    const r = await desktop.saveConfig({ receipt_printer_id: id ? Number(id) : null });
+    if (r?.success) { setCfg(r.config); invalidatePrinters(); setTillMsg(id ? 'Saved — receipts and the drawer now use this printer.' : 'No receipt printer chosen for this till.'); }
+    else setTillMsg(`Could not save: ${r?.error || 'unknown'}`);
+  }
+  async function setPrintingTill(on) {
+    setTillMsg('');
+    try {
+      await api.adminSetPrintingDevice(on ? cfg.deviceId : '');
+      await desktop.saveConfig({ printing_till: on });
+      await loadShopPrinters();
+      setTillMsg(on ? 'This till now prints prep tickets for online orders.' : 'This till no longer prints online orders\' tickets.');
+    } catch (e) { setTillMsg(e.message); }
+  }
+  async function testTillPrinter() {
+    setBusy(true); setTillMsg('Sending test page…');
+    const dest = resolved?.receipt ? printerDest(resolved.receipt) : printer;
+    const r = await desktop.testPrint(dest);
+    if (resolved?.receipt) api.printerTestResult(resolved.receipt.id, !!r?.ok).catch(() => {}).then(loadShopPrinters);
+    setTillMsg(r?.ok ? 'Test page sent — check the printer.' : `Test failed: ${r?.error}`);
+    setBusy(false);
+  }
+  async function tillDrawer() {
+    setBusy(true); setTillMsg('');
+    const r = await desktop.kickDrawer(resolved?.receiptDest || undefined);
+    setTillMsg(r?.ok ? 'Drawer pulse sent.' : `Drawer failed: ${r?.error}`);
+    setBusy(false);
+  }
   const hasPrinter = !!(printer.ip || printer.name);
 
   async function save() {
@@ -131,80 +169,44 @@ export default function DeviceSection() {
       </div>
 
       <div className="panel">
-        <h3 style={{ marginTop: 0 }}>Receipt printer &amp; cash drawer</h3>
-        {!editing && hasPrinter ? (
-          <div className="device-card">
-            <div className="device-icon">🖨</div>
+        <h3 style={{ marginTop: 0 }}>This till</h3>
+        <p className="muted" style={{ marginTop: 0, fontSize: 13 }}>Which of the shop's printers this computer uses for receipts (the one its cash drawer is plugged into). Printers themselves are added to the shared list below.</p>
+        {shopPrinters && receiptChoices.length === 0 && <p className="muted" style={{ fontSize: 13 }}>No receipt printer in the list yet — add one below, then choose it here.{hasPrinter ? ' Until then this till keeps using its old printer setting.' : ''}</p>}
+        <label>Receipt printer for this till</label>
+        <select value={cfg?.receiptPrinterId || ''} onChange={(e) => chooseReceiptPrinter(e.target.value)}>
+          <option value="">— none —</option>
+          {receiptChoices.map((p) => <option key={p.id} value={p.id}>{p.name} · {p.kind === 'usb' ? p.usb_name : p.ip}</option>)}
+        </select>
+        {resolved?.receipt && (
+          <div className="device-card" style={{ marginTop: 8 }}>
+            <div className="device-icon">🧾</div>
             <div className="device-main">
-              <div className="device-title">Receipt printer: {printer.ip ? `${printer.ip}${Number(printer.port) !== 9100 ? `:${printer.port}` : ''}` : printer.name}{printer.model ? ` · ${printer.model}` : ''}</div>
-              <div className="device-sub">
-                {printer.lastTestAt ? `Last test ${printer.lastTestOk ? 'OK' : 'FAILED'} ${fmtWhen(printer.lastTestAt)}` : 'Not tested yet'}
-                {' · '}{printer.autoPrint !== false ? 'auto-prints receipts' : 'manual receipts'}
-                {' · '}{printer.kickDrawerOnCash !== false ? 'opens drawer on cash' : 'drawer off'}
-              </div>
+              <div className="device-title">{resolved.receipt.name}{resolved.receipt.model ? ` · ${resolved.receipt.model}` : ''}</div>
+              <div className="device-sub">{resolved.receipt.kind === 'usb' ? `USB · ${resolved.receipt.usb_name}` : `${resolved.receipt.ip}${Number(resolved.receipt.port) !== 9100 ? `:${resolved.receipt.port}` : ''}`} · {resolved.receipt.last_test_at ? `last test ${resolved.receipt.last_test_ok ? 'OK' : 'FAILED'} ${fmtWhen(resolved.receipt.last_test_at)}` : 'not tested yet'}</div>
             </div>
-            <button className="btn secondary" disabled={busy} onClick={() => setEditing(true)}>Change</button>
           </div>
-        ) : (
-          <>
-            <p className="muted" style={{ marginTop: 0, fontSize: 13 }}>
-              Most receipt printers are on the shop's network — press <strong>Find printers</strong> and pick yours.
-              A USB printer installed on this computer is chosen from the list instead. The cash drawer plugs into the receipt printer.
-            </p>
-            <div className="row" style={{ gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-              <button className="btn" disabled={scan?.busy} onClick={findPrinters}>{scan?.busy ? 'Looking on your network…' : '🔍 Find printers'}</button>
-              {scan && !scan.busy && <span className="muted" style={{ fontSize: 13 }}>{scan.error ? `Scan failed: ${scan.error}` : scan.printers?.length ? `${scan.printers.length} found on ${scan.subnet}` : (scan.message || `Nothing answered on ${scan.subnet || 'your network'} — is the printer on and plugged into the router?`)}</span>}
-            </div>
-            {scan?.printers?.length > 0 && (
-              <div className="scan-list">
-                {scan.printers.map((p) => (
-                  <div key={p.ip} className={`scan-hit ${printer.ip === p.ip ? 'on' : ''}`}>
-                    <span>🖨 <strong>{p.ip}</strong>{p.model ? <span className="muted"> · {p.model}</span> : <span className="muted"> · network receipt printer (port {p.port})</span>}</span>
-                    <button type="button" className="btn mini secondary" onClick={() => pick(p)}>{printer.ip === p.ip ? 'Selected' : 'Use this'}</button>
-                  </div>
-                ))}
-              </div>
-            )}
-            <details style={{ marginTop: 10 }} open={!!printer.ip && !scan?.printers?.some((p) => p.ip === printer.ip)}>
-              <summary className="muted" style={{ cursor: 'pointer', fontSize: 13 }}>Enter the address by hand</summary>
-              <div className="row" style={{ gap: 12, flexWrap: 'wrap', marginTop: 6 }}>
-                <div style={{ flex: '2 1 200px' }}>
-                  <label>Printer IP</label>
-                  <input value={printer.ip} onChange={(e) => set('ip', e.target.value)} placeholder="e.g. 192.168.1.50" />
-                </div>
-                <div style={{ flex: '1 1 100px' }}>
-                  <label>Port</label>
-                  <input type="number" value={printer.port} onChange={(e) => set('port', e.target.value)} />
-                </div>
-                <div style={{ flex: '1 1 100px' }}>
-                  <label>LPR queue</label>
-                  <input value={printer.lprQueue} onChange={(e) => set('lprQueue', e.target.value)} placeholder="lp" />
-                </div>
-              </div>
-            </details>
-            <label style={{ marginTop: 10 }}>USB printer on this computer (instead of a network address)</label>
-            <select value={printer.name} onChange={(e) => { const q = osPrinters.find((p) => p.name === e.target.value); setPrinter((cur) => ({ ...cur, name: e.target.value, model: q?.model || q?.label || '', ...(e.target.value ? { ip: '' } : {}) })); }}>
-              <option value="">— none —</option>
-              {osPrinters.map((p) => <option key={p.name} value={p.name}>{usbLabel(p)}{p.queue && p.queue !== usbLabel(p) ? ` (${p.queue})` : ''}{p.isDefault ? ' · default' : ''}</option>)}
-            </select>
-            <label className="row" style={{ marginTop: 10, gap: 8 }}>
-              <input type="checkbox" style={{ width: 'auto' }} checked={printer.autoPrint !== false} onChange={(e) => set('autoPrint', e.target.checked)} />
-              <span>Print a receipt automatically after every sale</span>
-            </label>
-            <label className="row" style={{ marginTop: 6, gap: 8 }}>
-              <input type="checkbox" style={{ width: 'auto' }} checked={printer.kickDrawerOnCash !== false} onChange={(e) => set('kickDrawerOnCash', e.target.checked)} />
-              <span>Open the cash drawer on cash sales</span>
-            </label>
-          </>
         )}
+        <label className="row" style={{ marginTop: 10, gap: 8 }}>
+          <input type="checkbox" style={{ width: 'auto' }} checked={printer.autoPrint !== false} onChange={(e) => { set('autoPrint', e.target.checked); desktop.saveConfig({ printer: { autoPrint: e.target.checked } }); }} />
+          <span>Print a receipt automatically after every sale</span>
+        </label>
+        <label className="row" style={{ marginTop: 6, gap: 8 }}>
+          <input type="checkbox" style={{ width: 'auto' }} checked={printer.kickDrawerOnCash !== false} onChange={(e) => { set('kickDrawerOnCash', e.target.checked); desktop.saveConfig({ printer: { kickDrawerOnCash: e.target.checked } }); }} />
+          <span>Open the cash drawer on cash sales</span>
+        </label>
+        <label className="row" style={{ marginTop: 6, gap: 8 }}>
+          <input type="checkbox" style={{ width: 'auto' }} checked={isPrintingTill} disabled={!isManager || !cfg?.deviceId} onChange={(e) => setPrintingTill(e.target.checked)} />
+          <span>This till prints online orders' prep tickets{shopPrinters?.printing_device_id && !isPrintingTill ? <span className="muted"> (another till has this today)</span> : ''}</span>
+        </label>
         <div className="row" style={{ marginTop: 12, gap: 8, flexWrap: 'wrap' }}>
-          {editing && <button className="btn" disabled={busy || !hasPrinter} onClick={save}>Save printer</button>}
-          {editing && hasPrinter && (cfg?.printer?.ip || cfg?.printer?.name) && <button className="btn ghost" disabled={busy} onClick={() => { setPrinter({ ...EMPTY_PRINTER, ...(cfg?.printer || {}) }); setEditing(false); setMsg(''); }}>Cancel</button>}
-          <button className="btn secondary" disabled={busy || !hasPrinter} onClick={test}>🖨 Print test page</button>
-          <button className="btn secondary" disabled={busy || !hasPrinter} onClick={drawer}>💵 Open drawer</button>
+          <button className="btn secondary" disabled={busy || !(resolved?.receipt || hasPrinter)} onClick={testTillPrinter}>🖨 Print test page</button>
+          <button className="btn secondary" disabled={busy || !(resolved?.receipt || hasPrinter)} onClick={tillDrawer}>💵 Open drawer</button>
         </div>
-        {msg && <p style={{ fontSize: 13, marginTop: 8 }}>{msg}</p>}
+        {tillMsg && <p style={{ fontSize: 13, marginTop: 8 }}>{tillMsg}</p>}
+        <p className="muted" style={{ fontSize: 12, marginTop: 8 }}>Device id: {cfg?.deviceId ? cfg.deviceId.slice(0, 8) : '—'}</p>
       </div>
+
+      <PrintersCard isManager={isManager} onChanged={() => { invalidatePrinters(); loadShopPrinters(); }} />
 
       <div className="panel">
         <h3 style={{ marginTop: 0 }}>Barcode scanner</h3>
@@ -241,33 +243,6 @@ export default function DeviceSection() {
           {scannerMsg && <span className="muted" style={{ fontSize: 13 }}>{scannerMsg}</span>}
         </div>
         <p className="muted" style={{ fontSize: 12, marginTop: 8 }}>Suffix in use: {SUFFIX_KEYS[scanner.suffix] || 'none'}. The phone Scan app is separate and needs no setup.</p>
-      </div>
-
-      <div className="panel">
-        <h3 style={{ marginTop: 0 }}>Parcel label printer (4×6 in)</h3>
-        <p className="muted" style={{ marginTop: 0, fontSize: 13 }}>
-          For postal orders. A direct-thermal 4×6 label printer installed on this computer with its own driver
-          (Rollo, MUNBYN, Zebra ZD220/GK420, Brother QL-1110). Labels print through the driver, so any brand works.
-          Not app-only Bluetooth minis. Royal Mail Click &amp; Drop postage PDFs print to the same printer.
-        </p>
-        <label>Label printer</label>
-        <select value={labelPrinter} onChange={(e) => setLabelPrinter(e.target.value)}>
-          <option value="">— none —</option>
-          {osPrinters.map((p) => <option key={p.name} value={p.name}>{usbLabel(p)}{p.queue && p.queue !== usbLabel(p) ? ` (${p.queue})` : ''}{p.isDefault ? ' · default' : ''}</option>)}
-        </select>
-        <div className="row" style={{ marginTop: 12, gap: 8, flexWrap: 'wrap' }}>
-          <button className="btn" disabled={busy} onClick={async () => { setBusy(true); const r = await desktop.saveConfig({ label_printer: labelPrinter }); setLabelMsg(r?.success ? 'Saved.' : `Could not save: ${r?.error}`); setBusy(false); }}>Save label printer</button>
-          <button className="btn secondary" disabled={busy || !labelPrinter} onClick={async () => {
-            setBusy(true); setLabelMsg('Sending test label…');
-            try {
-              const saved = await desktop.saveConfig({ label_printer: labelPrinter });
-              if (!saved?.success) throw new Error(saved?.error || 'save failed');
-              const r = await desktop.printLabel(await buildLabelHtml(SAMPLE_LABEL), 1);
-              setLabelMsg(r?.ok ? 'Test label sent — check the printer.' : `Test failed: ${r?.error}`);
-            } catch (e) { setLabelMsg(`Test failed: ${e.message}`); } finally { setBusy(false); }
-          }}>🏷 Print test label</button>
-        </div>
-        {labelMsg && <p style={{ fontSize: 13, marginTop: 8 }}>{labelMsg}</p>}
       </div>
 
       <div className="panel">
