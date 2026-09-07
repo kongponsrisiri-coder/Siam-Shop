@@ -20,8 +20,10 @@ export default function PrintLabelButton({ order, onPrinted, compact = false }) 
       const data = await api.adminOrderLabel(order.id);
       const html = await buildLabelHtml(data, { packingCopy });
       if (isElectron) {
-        if (!electronConfig.labelPrinter) throw new Error('No label printer chosen — Admin → This device.');
-        const r = await desktop.printLabel(html, 1);
+        const { loadPrinters } = await import('../printers.js');
+        const name = (await loadPrinters()).labelName || electronConfig.labelPrinter;
+        if (!name) throw new Error('No label printer — add one under Admin → This device → Printers.');
+        const r = await desktop.printLabel(html, 1, name);
         if (!r?.ok) throw new Error(r?.error || 'Print failed');
       } else if (!printLabelInBrowser(html)) {
         throw new Error('Pop-up blocked — allow pop-ups to print the label.');

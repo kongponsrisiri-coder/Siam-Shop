@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { api } from '../api.js';
 import ManagerPin from './ManagerPin.jsx';
 import { isElectron, desktop } from '../electron.js';
+import { loadPrinters } from '../printers.js';
 
 // Refund a paid order (SIAMSHOP-REFUND-001): full or pick items, reason
 // (decides restock vs write-off), money back by cash / card / Stripe. Every
@@ -33,7 +34,7 @@ export default function RefundModal({ order, isManager, onDone, onClose }) {
       const items = mode === 'items' ? Object.entries(qtys).filter(([, q]) => Number(q) > 0).map(([id, q]) => ({ order_item_id: Number(id), qty: Number(q) })) : undefined;
       if (mode === 'items' && (!items || !items.length)) throw new Error('Pick at least one item to refund');
       const r = await api.adminRefundOrder(order.id, { items, reason, method, note, approval_token: approvalToken });
-      if (isElectron && method === 'cash') desktop.kickDrawer().catch(() => {});
+      if (isElectron && method === 'cash') loadPrinters().catch(() => null).then((p) => desktop.kickDrawer(p?.receiptDest)).catch(() => {});
       onDone(r);
     } catch (e) {
       if (e.status === 403 && /manager/i.test(e.message)) setNeedPin(true);

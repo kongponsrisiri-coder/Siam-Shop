@@ -5,6 +5,7 @@ import { isElectron } from '../../electron.js';
 import PrintLabelButton from '../../components/PrintLabelButton.jsx';
 import PrintReceiptButton from '../../components/PrintReceiptButton.jsx';
 import RefundModal from '../../components/RefundModal.jsx';
+import PrepReprintButton from '../../components/PrepReprintButton.jsx';
 import { staffSession } from '../../api.js';
 
 // Clear, combined payment + fulfilment state for the list.
@@ -168,6 +169,7 @@ function OrderDetail({ id, onBack, onChanged }) {
             {(cust.email || order.customer_email) && <div className="muted">{maskEmail(cust.email || order.customer_email, order.id)}</div>}
             {(cust.phone || order.customer_phone) && <div className="muted">{cust.phone || order.customer_phone}</div>}
             {order.channel === 'instore' && <div style={{ flex: '1 1 100%' }}><PrintReceiptButton order={order} /></div>}
+            <div style={{ flex: '1 1 100%' }}><PrepReprintButton order={order} /></div>
           {order.fulfilment === 'collection' ? (
               <div style={{ marginTop: 6 }}>
                 🛍️ Pickup: <strong>{order.pickup_at ? new Date(order.pickup_at).toLocaleString() : 'ASAP'}</strong>

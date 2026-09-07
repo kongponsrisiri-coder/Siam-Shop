@@ -38,8 +38,10 @@ export const customerAuth = {
   clear: () => localStorage.removeItem(CUSTOMER_TOKEN_KEY),
 };
 
+const DEVICE_ID = (typeof window !== 'undefined' && window.electron && window.electron.config && window.electron.config.deviceId) || '';
 async function request(path, { method = 'GET', body, authed = false, customerAuthed = false, token } = {}) {
   const headers = { 'Content-Type': 'application/json' };
+  if (DEVICE_ID) headers['X-Device-Id'] = DEVICE_ID; // which till (SIAMSHOP-PRINTERS-001)
   if (authed) headers.Authorization = `Bearer ${token || auth.get()}`; // token = one-off manager override (PIN modal)
   if (customerAuthed) headers.Authorization = `Bearer ${customerAuth.get()}`;
 
@@ -167,6 +169,18 @@ export const api = {
   adminListCustomers: (consentOnly) => request(`/api/admin/customers${consentOnly ? '?consent=1' : ''}`, { authed: true }),
   adminGetCustomer: (id) => request(`/api/admin/customers/${id}`, { authed: true }),
   adminDeleteCustomer: (id) => request(`/api/admin/customers/${id}`, { method: 'DELETE', authed: true }),
+  // Printers + prep tickets (SIAMSHOP-PRINTERS-001)
+  printers: () => request('/api/printers', { authed: true }),
+  adminAddPrinter: (body) => request('/api/admin/printers', { method: 'POST', body, authed: true }),
+  adminUpdatePrinter: (id, body) => request(`/api/admin/printers/${id}`, { method: 'PUT', body, authed: true }),
+  adminDeletePrinter: (id) => request(`/api/admin/printers/${id}`, { method: 'DELETE', authed: true }),
+  printerTestResult: (id, ok) => request(`/api/printers/${id}/test-result`, { method: 'POST', body: { ok }, authed: true }),
+  adminSetPrintingDevice: (device_id) => request('/api/admin/printing-device', { method: 'PUT', body: { device_id }, authed: true }),
+  prepPrintQueue: (deviceId) => request(`/api/prep/print-queue?device_id=${encodeURIComponent(deviceId)}`, { authed: true }),
+  prepTicketClaim: (id, deviceId) => request(`/api/prep/tickets/${id}/claim`, { method: 'POST', body: { device_id: deviceId }, authed: true }),
+  prepTicketAck: (id, deviceId, ok, error) => request(`/api/prep/tickets/${id}/ack`, { method: 'POST', body: { device_id: deviceId, ok, error }, authed: true }),
+  prepTicketsFor: (orderId) => request(`/api/prep/tickets?order_id=${orderId}`, { authed: true }),
+  prepReprint: (orderId, deviceId, printerId) => request('/api/prep/tickets/reprint', { method: 'POST', body: { order_id: orderId, device_id: deviceId, printer_id: printerId }, authed: true }),
   // CRM (SIAMSHOP-CRM-001)
   adminListCustomersSeg: (segment) => request(`/api/admin/customers${segment ? `?segment=${encodeURIComponent(segment)}` : ''}`, { authed: true }),
   adminCreateCustomer: (body) => request('/api/admin/customers', { method: 'POST', body, authed: true }),

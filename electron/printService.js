@@ -143,6 +143,48 @@ function buildReceipt(r) {
   ]);
 }
 
+// ── Prep ticket (SIAMSHOP-PRINTERS-001) ───────────────────────────────────────
+// Kitchen/counter ticket for made-to-order items: order # and service type BIG,
+// items in large text with options beneath, customer name for collections.
+// Never kicks the drawer. Latin-1 only for now (ELECTRON-002 raster later).
+function buildPrepTicket(t) {
+  const when = t.created_at ? new Date(t.created_at) : new Date();
+  const time = when.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/London' });
+  const FULFIL = { dine_in: 'EAT IN', takeaway: 'TAKE AWAY', collection: 'COLLECTION', delivery: 'DELIVERY' };
+  const service = FULFIL[t.fulfilment] || String(t.fulfilment || '').toUpperCase() || 'TAKE AWAY';
+  const source = t.channel === 'instore' ? 'Till' : t.source === 'messenger' ? 'Messenger' : 'Online';
+  const HALF = Math.floor(LINE_WIDTH / 2); // SIZE_BIG doubles width → 21 cols
+  const items = [];
+  for (const it of t.items || []) {
+    const name = wrap(`${it.qty}x ${it.name}`, HALF);
+    items.push(CMD.BOLD_ON, CMD.SIZE_BIG);
+    for (const l of name) items.push(txt(l), lf());
+    items.push(CMD.SIZE_NORMAL, CMD.BOLD_OFF);
+    if (it.options && it.options.length) for (const l of wrap('   - ' + it.options.join(', '), LINE_WIDTH)) items.push(CMD.SIZE_TALL, txt(l), CMD.SIZE_NORMAL, lf());
+    items.push(lf());
+  }
+  const pickup = t.pickup_at ? new Date(t.pickup_at).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/London' }) : null;
+  return flatten([
+    CMD.INIT,
+    CMD.ALIGN_CENTER,
+    t.reprint ? [CMD.BOLD_ON, txt('*** REPRINT ***'), CMD.BOLD_OFF, lf()] : [],
+    txt(String(t.shop_name || 'SiamShop').slice(0, LINE_WIDTH)), lf(),
+    t.printer_name ? [txt(String(t.printer_name).slice(0, LINE_WIDTH)), lf()] : [],
+    CMD.BOLD_ON, CMD.SIZE_BIG, txt(`#${t.order_id}`), lf(), txt(service.slice(0, HALF)), CMD.SIZE_NORMAL, CMD.BOLD_OFF, lf(),
+    CMD.ALIGN_LEFT,
+    col2(`${source}${t.staff ? ' - ' + String(t.staff).slice(0, 16) : ''}`, time), lf(),
+    pickup ? [CMD.BOLD_ON, col2('PICKUP', pickup), CMD.BOLD_OFF, lf()] : [],
+    t.customer_name ? [col2('Customer', String(t.customer_name).slice(0, 26)), lf()] : [],
+    rule(), lf(),
+    items,
+    t.other_items > 0 ? [txt(`+ ${t.other_items} grocery item${t.other_items === 1 ? '' : 's'} packed at the till`), lf()] : [],
+    t.notes ? [rule(), lf(), CMD.BOLD_ON, txt('NOTE: '), CMD.BOLD_OFF, ...wrap(String(t.notes), LINE_WIDTH - 6).flatMap((l, i) => [txt(i ? '      ' + l : l), lf()])] : [],
+    rule(), lf(),
+    lf(3),
+    CMD.CUT,
+  ]);
+}
+
 // ── Z report / cash-up (SIAMSHOP-TILL-001) ────────────────────────────────────
 // z = the session summary from GET /api/till/sessions/:id (+ shopName).
 function buildZReport(z, shopName = 'SiamShop') {
@@ -454,9 +496,13 @@ async function printZReport(printer, z, shopName) {
   const d = dest(printer);
   await sendRaw(d.ip, d.port, buildZReport(z, shopName), { printerName: d.printerName, lprQueue: d.lprQueue, lprPort: d.lprPort });
 }
+async function printPrepTicket(printer, ticket) {
+  const d = dest(printer);
+  await sendRaw(d.ip, d.port, buildPrepTicket(ticket), { printerName: d.printerName, lprQueue: d.lprQueue, lprPort: d.lprPort });
+}
 async function testPrint(printer) {
   const d = dest(printer);
   await sendRaw(d.ip, d.port, buildTestPage({ ip: d.ip, port: d.port, name: d.printerName }), { printerName: d.printerName, lprQueue: d.lprQueue, lprPort: d.lprPort });
 }
 
-module.exports = { printReceipt, openCashDrawer, testPrint, printZReport, buildReceipt, buildZReport, buildTestPage, findCupsQueueForIp, LINE_WIDTH, CMD, raster: require('./raster') };
+module.exports = { printReceipt, openCashDrawer, testPrint, printZReport, printPrepTicket, buildReceipt, buildZReport, buildTestPage, buildPrepTicket, findCupsQueueForIp, LINE_WIDTH, CMD, raster: require('./raster') };

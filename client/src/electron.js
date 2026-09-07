@@ -9,14 +9,16 @@ export const electronConfig = (isElectron && window.electron.config) || {};
 
 export const desktop = {
   printReceipt: (payload) => (isElectron ? window.electron.printReceipt(payload) : Promise.resolve({ ok: false, error: 'not-desktop' })),
-  kickDrawer: () => (isElectron ? window.electron.kickDrawer() : Promise.resolve({ ok: false, error: 'not-desktop' })),
-  printZ: (z, shopName) => (isElectron ? window.electron.printZ({ z, shopName }) : Promise.resolve({ ok: false, error: 'not-desktop' })),
+  kickDrawer: (dest) => (isElectron ? window.electron.kickDrawer(dest) : Promise.resolve({ ok: false, error: 'not-desktop' })),
+  // Prep ticket on a prep printer (SIAMSHOP-PRINTERS-001)
+  printPrep: (ticket, dest) => (isElectron && window.electron.printPrep ? window.electron.printPrep({ ticket, dest }) : Promise.resolve({ ok: false, error: 'not-desktop' })),
+  printZ: (z, shopName, dest) => (isElectron ? window.electron.printZ({ z, shopName, dest }) : Promise.resolve({ ok: false, error: 'not-desktop' })),
   testPrint: (printer) => (isElectron ? window.electron.testPrint(printer) : Promise.resolve({ ok: false, error: 'not-desktop' })),
   listPrinters: () => (isElectron ? window.electron.listPrinters() : Promise.resolve([])),
   // Find network receipt printers on the till's LAN (SIAMSHOP-DEVICE-001 D1).
   scanPrinters: () => (isElectron && window.electron.scanPrinters ? window.electron.scanPrinters() : Promise.resolve({ printers: [], message: 'Scanning only works in the desktop app.' })),
   // Parcel labels (SIAMSHOP-POST-001) — HTML → OS driver, 4×6 in.
-  printLabel: (html, copies = 1) => (isElectron ? window.electron.printLabel({ html, copies }) : Promise.resolve({ ok: false, error: 'not-desktop' })),
+  printLabel: (html, copies = 1, deviceName) => (isElectron ? window.electron.printLabel({ html, copies, deviceName }) : Promise.resolve({ ok: false, error: 'not-desktop' })),
   getConfig: () => (isElectron ? window.electron.getConfig() : Promise.resolve({})),
   saveConfig: (patch) => (isElectron ? window.electron.saveConfig(patch) : Promise.resolve({ success: false })),
   getVersion: () => (isElectron ? window.electron.getVersion() : Promise.resolve(null)),

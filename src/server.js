@@ -21,6 +21,7 @@ const delivery = require('./services/delivery');
 const messenger = require('./services/messengerService');
 const emailService = require('./services/emailService');
 const crm = require('./services/crm'); // SIAMSHOP-CRM-001
+const prepTickets = require('./services/prepTickets'); // SIAMSHOP-PRINTERS-001
 if (process.env.SIAMSHOP_FAKE_EMAIL === '1') { crm.useFakeTransport(); console.log('[crm] FAKE email transport (test rig)'); }
 const carriers = require('./services/carriers');
 const assistant = require('./services/assistantService');
@@ -74,7 +75,7 @@ app.use(
   cors({
     origin: '*',
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
-    allowedHeaders: 'Content-Type,Authorization',
+    allowedHeaders: 'Content-Type,Authorization,X-Device-Id', // X-Device-Id: which till (SIAMSHOP-PRINTERS-001); the desktop calls from file://
     optionsSuccessStatus: 204,
   })
 );
@@ -130,11 +131,11 @@ const ROLE_ALLOW = {
     ['GET', /^\/api\/admin\/me$/], ['GET', /^\/api\/admin\/products$/], ['GET', /^\/api\/admin\/orders(\/|$)/],
     ['*', /^\/api\/sales(\/|$)/], ['*', /^\/api\/prep(\/|$)/], ['GET', /^\/api\/products\/lookup$/],
     ['*', /^\/api\/stock\/(receive|stocktake|goods-in-batch|scan-invoice|movements)$/], ['GET', /^\/api\/staff\/me$/], ['POST', /^\/api\/staff\/change-pin$/],
-    ['*', /^\/api\/till\/(\/|$)/], ['*', /^\/api\/till\/session(\/|$)/], ['POST', /^\/api\/till\/void$/], ['*', /^\/api\/till\/customers$/], ['GET', /^\/api\/till\/sessions(\/|$)/],
+    ['*', /^\/api\/till\/(\/|$)/], ['*', /^\/api\/till\/session(\/|$)/], ['POST', /^\/api\/till\/void$/], ['*', /^\/api\/till\/customers$/], ['GET', /^\/api\/printers$/], ['*', /^\/api\/prep\/(print-queue|tickets)(\/|$)/], ['POST', /^\/api\/printers\/\d+\/test-result$/], ['GET', /^\/api\/till\/sessions(\/|$)/],
     ['POST', /^\/api\/admin\/orders\/\d+\/(ready|collected|dispatch|label-printed|refund)$/], ['GET', /^\/api\/admin\/orders\/\d+\/refunds$/],
   ],
   prep: [
-    ['GET', /^\/api\/admin\/me$/], ['*', /^\/api\/prep(\/|$)/], ['GET', /^\/api\/staff\/me$/], ['POST', /^\/api\/staff\/change-pin$/],
+    ['GET', /^\/api\/admin\/me$/], ['*', /^\/api\/prep(\/|$)/], ['GET', /^\/api\/staff\/me$/], ['POST', /^\/api\/staff\/change-pin$/], ['GET', /^\/api\/printers$/],
   ],
 };
 function roleAllows(role, method, path) {
@@ -566,6 +567,8 @@ async function fulfilOrder(orderId, baseUrl) {
 
     // Emails are best-effort (don't fail the order if Brevo is down/unset).
     sendOrderEmails(order, items, baseUrl).catch((e) => console.warn('[email] order', orderId, e.message));
+    // Prep tickets for the shop's designated printing till (no origin device).
+    prepTickets.enqueue(pool, order.shop_id, orderId).catch((e) => console.warn('[prep-tickets] enqueue failed for order', orderId, e.message));
     return { ok: true };
   } catch (err) {
     await client.query('ROLLBACK');
@@ -2135,8 +2138,14 @@ app.post('/api/sales', requireAuth, async (req, res) => {
     }
 
     await client.query('COMMIT');
+    // Prep tickets (SIAMSHOP-PRINTERS-001): one per prep printer with matching
+    // items; the till that took payment prints them (origin = X-Device-Id).
+    let prepQueue = [];
+    try { prepQueue = await prepTickets.enqueue(pool, shopId, orderId, { originDeviceId: String(req.headers['x-device-id'] || '').slice(0, 64) || null }); }
+    catch (e) { console.warn('[prep-tickets] enqueue failed for sale', orderId, e.message); }
     res.status(201).json({
       id: orderId,
+      prep_tickets: prepQueue,
       channel: 'instore',
       subtotal: +subtotal.toFixed(2),
       total: +total.toFixed(2),
@@ -3442,6 +3451,218 @@ app.get('/api/admin/report', requireAuth, async (req, res) => {
 // ---------------------------------------------------------------------------
 // Admin CRM — customers + spending (SIAMSHOP-006)
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Printers (SIAMSHOP-PRINTERS-001): shop-wide list with jobs; prep tickets queue.
+// ---------------------------------------------------------------------------
+const PRINTER_JOBS = ['receipt', 'prep', 'label'];
+function printerBody(b = {}) {
+  const kind = b.kind === 'usb' ? 'usb' : 'network';
+  const out = {
+    name: String(b.name || '').trim().slice(0, 100),
+    kind,
+    ip: kind === 'network' ? String(b.ip || '').trim().slice(0, 64) : null,
+    port: kind === 'network' ? (parseInt(b.port, 10) || 9100) : 9100,
+    lpr_queue: kind === 'network' ? (String(b.lpr_queue || '').trim().slice(0, 64) || null) : null,
+    usb_name: kind === 'usb' ? String(b.usb_name || '').trim().slice(0, 200) : null,
+    model: String(b.model || '').trim().slice(0, 120) || null,
+    job: PRINTER_JOBS.includes(b.job) ? b.job : 'receipt',
+    prep_categories: Array.isArray(b.prep_categories) ? b.prep_categories.map((x) => parseInt(x, 10)).filter(Number.isInteger) : [],
+    active: b.active == null ? true : !!b.active,
+  };
+  if (!out.name) throw httpError(400, 'Give the printer a name');
+  if (kind === 'network' && !/^\d{1,3}(\.\d{1,3}){3}$/.test(out.ip)) throw httpError(400, 'Enter the printer\'s IP address');
+  if (kind === 'usb' && !out.usb_name) throw httpError(400, 'Choose the USB printer');
+  if (out.job !== 'prep') out.prep_categories = [];
+  return out;
+}
+// Any signed-in staff may read the list (the till needs it to print).
+app.get('/api/printers', requireAuth, async (req, res) => {
+  try {
+    const shopId = await resolveShopId(req);
+    if (!shopId) return res.status(404).json({ error: 'Shop not found' });
+    const { rows } = await pool.query(`SELECT * FROM printers WHERE shop_id = $1 ORDER BY job, name`, [shopId]);
+    const s = await getSettings(shopId);
+    res.json({ printers: rows, printing_device_id: s.printing_device_id || null });
+  } catch (err) {
+    console.error('[printers]', err.message);
+    res.status(500).json({ error: 'Failed to load printers' });
+  }
+});
+app.post('/api/admin/printers', requireAuth, requireManager, async (req, res) => {
+  try {
+    const shopId = await resolveShopId(req);
+    if (!shopId) return res.status(404).json({ error: 'Shop not found' });
+    const b = printerBody(req.body);
+    const { rows } = await pool.query(
+      `INSERT INTO printers (shop_id, name, kind, ip, port, lpr_queue, usb_name, model, job, prep_categories, active)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
+      [shopId, b.name, b.kind, b.ip, b.port, b.lpr_queue, b.usb_name, b.model, b.job, b.prep_categories, b.active]
+    );
+    res.status(201).json(rows[0]);
+  } catch (err) {
+    if (err.httpStatus) return res.status(err.httpStatus).json({ error: err.message });
+    console.error('[printers POST]', err.message);
+    res.status(500).json({ error: 'Failed to add printer' });
+  }
+});
+app.put('/api/admin/printers/:id', requireAuth, requireManager, async (req, res) => {
+  try {
+    const shopId = await resolveShopId(req);
+    if (!shopId) return res.status(404).json({ error: 'Shop not found' });
+    const { rows: cur } = await pool.query(`SELECT * FROM printers WHERE id = $1 AND shop_id = $2`, [req.params.id, shopId]);
+    if (!cur[0]) return res.status(404).json({ error: 'Printer not found' });
+    const b = printerBody({ ...cur[0], ...req.body, prep_categories: req.body.prep_categories ?? cur[0].prep_categories });
+    const { rows } = await pool.query(
+      `UPDATE printers SET name=$3, kind=$4, ip=$5, port=$6, lpr_queue=$7, usb_name=$8, model=$9, job=$10, prep_categories=$11, active=$12
+       WHERE id = $1 AND shop_id = $2 RETURNING *`,
+      [req.params.id, shopId, b.name, b.kind, b.ip, b.port, b.lpr_queue, b.usb_name, b.model, b.job, b.prep_categories, b.active]
+    );
+    res.json(rows[0]);
+  } catch (err) {
+    if (err.httpStatus) return res.status(err.httpStatus).json({ error: err.message });
+    console.error('[printers PUT]', err.message);
+    res.status(500).json({ error: 'Failed to update printer' });
+  }
+});
+app.delete('/api/admin/printers/:id', requireAuth, requireManager, async (req, res) => {
+  try {
+    const shopId = await resolveShopId(req);
+    if (!shopId) return res.status(404).json({ error: 'Shop not found' });
+    const { rowCount } = await pool.query(`DELETE FROM printers WHERE id = $1 AND shop_id = $2`, [req.params.id, shopId]);
+    if (!rowCount) return res.status(404).json({ error: 'Printer not found' });
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('[printers DELETE]', err.message);
+    res.status(500).json({ error: 'Failed to remove printer' });
+  }
+});
+// The device that ran a test page reports the result (staff-allowed).
+app.post('/api/printers/:id/test-result', requireAuth, async (req, res) => {
+  try {
+    const shopId = await resolveShopId(req);
+    if (!shopId) return res.status(404).json({ error: 'Shop not found' });
+    const { rows } = await pool.query(
+      `UPDATE printers SET last_test_at = NOW(), last_test_ok = $3 WHERE id = $1 AND shop_id = $2 RETURNING id, last_test_at, last_test_ok`,
+      [req.params.id, shopId, req.body?.ok === true]
+    );
+    if (!rows[0]) return res.status(404).json({ error: 'Printer not found' });
+    res.json(rows[0]);
+  } catch (err) {
+    console.error('[printers test-result]', err.message);
+    res.status(500).json({ error: 'Failed to record test' });
+  }
+});
+// Designated printing till (prints online orders' prep tickets) — manager.
+app.put('/api/admin/printing-device', requireAuth, requireManager, async (req, res) => {
+  try {
+    const shopId = await resolveShopId(req);
+    if (!shopId) return res.status(404).json({ error: 'Shop not found' });
+    const id = String(req.body?.device_id || '').slice(0, 64);
+    await pool.query(`INSERT INTO shop_settings (shop_id, key, value) VALUES ($1,'printing_device_id',$2) ON CONFLICT (shop_id, key) DO UPDATE SET value = EXCLUDED.value`, [shopId, id]);
+    res.json({ printing_device_id: id || null });
+  } catch (err) {
+    console.error('[printing-device]', err.message);
+    res.status(500).json({ error: 'Failed to save' });
+  }
+});
+
+// ── Prep ticket queue (staff) ────────────────────────────────────────────────
+const deviceIdOf = (req) => String(req.headers['x-device-id'] || req.query.device_id || req.body?.device_id || '').slice(0, 64);
+app.get('/api/prep/print-queue', requireAuth, async (req, res) => {
+  try {
+    const shopId = await resolveShopId(req);
+    if (!shopId) return res.status(404).json({ error: 'Shop not found' });
+    const deviceId = deviceIdOf(req);
+    if (!deviceId) return res.status(400).json({ error: 'device_id required' });
+    const s = await getSettings(shopId);
+    const designated = !!s.printing_device_id && s.printing_device_id === deviceId;
+    const tickets = await prepTickets.queueFor(pool, shopId, deviceId, { designated });
+    const held = await prepTickets.heldCount(pool, shopId);
+    res.json({ device_id: deviceId, designated, tickets, held: held.held, held_oldest: held.oldest });
+  } catch (err) {
+    console.error('[prep/print-queue]', err.message);
+    res.status(500).json({ error: 'Failed to load print queue' });
+  }
+});
+app.get('/api/prep/tickets/:id', requireAuth, async (req, res) => {
+  try {
+    const shopId = await resolveShopId(req);
+    if (!shopId) return res.status(404).json({ error: 'Shop not found' });
+    const t = await prepTickets.payload(pool, shopId, req.params.id);
+    if (!t) return res.status(404).json({ error: 'Ticket not found' });
+    res.json(t);
+  } catch (err) {
+    console.error('[prep/tickets GET]', err.message);
+    res.status(500).json({ error: 'Failed to load ticket' });
+  }
+});
+// Claim = "I am printing this" — exactly one device wins; returns the payload.
+app.post('/api/prep/tickets/:id/claim', requireAuth, async (req, res) => {
+  try {
+    const shopId = await resolveShopId(req);
+    if (!shopId) return res.status(404).json({ error: 'Shop not found' });
+    const deviceId = deviceIdOf(req);
+    if (!deviceId) return res.status(400).json({ error: 'device_id required' });
+    const c = await prepTickets.claim(pool, shopId, req.params.id, deviceId);
+    if (!c) {
+      const { rows: ex } = await pool.query(`SELECT id FROM prep_tickets WHERE id = $1 AND shop_id = $2`, [req.params.id, shopId]);
+      if (!ex[0]) return res.status(404).json({ error: 'Ticket not found' });
+      return res.status(409).json({ error: 'Already printing or printed on another till', code: 'claimed' });
+    }
+    res.json({ claimed: true, attempts: c.attempts, ticket: await prepTickets.payload(pool, shopId, req.params.id) });
+  } catch (err) {
+    console.error('[prep/tickets claim]', err.message);
+    res.status(500).json({ error: 'Claim failed' });
+  }
+});
+app.post('/api/prep/tickets/:id/ack', requireAuth, async (req, res) => {
+  try {
+    const shopId = await resolveShopId(req);
+    if (!shopId) return res.status(404).json({ error: 'Shop not found' });
+    const deviceId = deviceIdOf(req);
+    const r = await prepTickets.ack(pool, shopId, req.params.id, deviceId, req.body?.ok === true, req.body?.error);
+    if (!r) return res.status(409).json({ error: 'This ticket is not claimed by this device' });
+    res.json(r);
+  } catch (err) {
+    console.error('[prep/tickets ack]', err.message);
+    res.status(500).json({ error: 'Ack failed' });
+  }
+});
+// Reprint: new ticket rows (seq+1) for the order — from the Prep screen or Admin → Orders.
+app.post('/api/prep/tickets/reprint', requireAuth, async (req, res) => {
+  try {
+    const shopId = await resolveShopId(req);
+    if (!shopId) return res.status(404).json({ error: 'Shop not found' });
+    const orderId = parseInt(req.body?.order_id, 10);
+    if (!Number.isInteger(orderId)) return res.status(400).json({ error: 'order_id required' });
+    const { rows } = await pool.query(`SELECT id FROM orders WHERE id = $1 AND shop_id = $2`, [orderId, shopId]);
+    if (!rows[0]) return res.status(404).json({ error: 'Order not found' });
+    const created = await prepTickets.enqueue(pool, shopId, orderId, { originDeviceId: deviceIdOf(req) || null, seq: 1, printerId: req.body?.printer_id ? parseInt(req.body.printer_id, 10) : null });
+    if (!created.length) return res.status(400).json({ error: 'No prep printer takes any item on this order' });
+    res.status(201).json({ prep_tickets: created });
+  } catch (err) {
+    console.error('[prep/tickets reprint]', err.message);
+    res.status(500).json({ error: 'Reprint failed' });
+  }
+});
+// Tickets of an order (status per printer) — Prep screen + Admin → Orders.
+app.get('/api/prep/tickets', requireAuth, async (req, res) => {
+  try {
+    const shopId = await resolveShopId(req);
+    if (!shopId) return res.status(404).json({ error: 'Shop not found' });
+    const orderId = parseInt(req.query.order_id, 10);
+    if (!Number.isInteger(orderId)) return res.status(400).json({ error: 'order_id required' });
+    const { rows } = await pool.query(
+      `SELECT t.id, t.printer_id, pr.name AS printer_name, t.seq, t.status, t.attempts, t.device_id, t.origin_device_id, t.last_error, t.printed_at, t.created_at
+       FROM prep_tickets t JOIN printers pr ON pr.id = t.printer_id WHERE t.shop_id = $1 AND t.order_id = $2 ORDER BY t.seq, t.printer_id`, [shopId, orderId]
+    );
+    res.json(rows);
+  } catch (err) {
+    console.error('[prep/tickets list]', err.message);
+    res.status(500).json({ error: 'Failed to load tickets' });
+  }
+});
+
 // ---------------------------------------------------------------------------
 // CRM (SIAMSHOP-CRM-001): customers with spend / dates / top products / channels,
 // operator-managed consent, unsubscribe, campaigns, automations. All shop-scoped.

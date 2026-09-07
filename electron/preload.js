@@ -21,7 +21,8 @@ contextBridge.exposeInMainWorld('electron', {
   resetConfig: () => ipcRenderer.invoke('siamshop:reset-config'),
   // Printing runs in the MAIN process (Path A has no local server).
   printReceipt: (payload) => ipcRenderer.invoke('siamshop:print-receipt', payload),
-  kickDrawer: () => ipcRenderer.invoke('siamshop:kick-drawer'),
+  kickDrawer: (dest) => ipcRenderer.invoke('siamshop:kick-drawer', dest),
+  printPrep: (payload) => ipcRenderer.invoke('siamshop:print-prep', payload),
   printZ: (payload) => ipcRenderer.invoke('siamshop:print-z', payload),
   testPrint: (printer) => ipcRenderer.invoke('siamshop:test-print', printer),
   listPrinters: () => ipcRenderer.invoke('siamshop:list-printers'),
