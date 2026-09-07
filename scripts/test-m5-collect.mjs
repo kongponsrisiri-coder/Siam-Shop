@@ -169,6 +169,18 @@ check('done removes ticket from the queue', !prep.orders.some((x) => x.id === ti
 r = await req('GET', '/api/prep', null, false);
 check('prep requires auth', r.status === 401, r.status);
 
+console.log('— minimum order is a delivery rule, not a collection one');
+// Regression: a £30 floor used to block click & collect too, so a customer
+// picking up one £9 lunch box could not order at all (found 7 Sep).
+await req('PUT', '/api/admin/settings', { minimum_order_amount: '30' });
+r = await req('POST', '/api/orders', { items: [{ product_id: rice.id, qty: 1 }], postcode: 'SW1A 1AA', delivery_address: '10 Test St', customer: cust }, false);
+check('delivery under the minimum → 400 naming delivery', r.status === 400 && /[Mm]inimum order for delivery/.test(r.data.error), r.data);
+r = await req('POST', '/api/orders', { fulfilment: 'collection', pickup_at: 'asap', items: [{ product_id: rice.id, qty: 1 }], customer: cust }, false);
+check('collection under the minimum → 201 (no floor on collection)', r.status === 201 && money(r.data.total) === 361, r.data);
+r = await req('POST', '/api/orders', { items: [{ product_id: rice.id, qty: 10 }], postcode: 'SW1A 1AA', delivery_address: '10 Test St', customer: cust }, false);
+check('delivery over the minimum → 201', r.status === 201, r.data);
+await req('PUT', '/api/admin/settings', { minimum_order_amount: '0' });
+
 console.log('— categories: clearing availability');
 r = await req('PUT', `/api/admin/categories/${lunchCat.data.id}`, { availability: null });
 check('PUT availability null → always', r.status === 200 && r.data.availability == null, r.data);

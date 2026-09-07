@@ -200,7 +200,8 @@ function CheckoutForm() {
   const collectionEnabled = !!settings?.collection_enabled;
   const closed = settings && settings.opening_hours && !settings.open_now;
   const minOrder = Number(settings?.minimum_order_amount) || 0;
-  const belowMin = minOrder > 0 && subtotal < minOrder;
+  // Delivery only — collection has no floor (see /api/orders on the server).
+  const belowMin = !collection && minOrder > 0 && subtotal < minOrder;
   const deliveryFee = !collection && quote ? Number(quote.fee) : 0;
   const total = subtotal + deliveryFee;
 
@@ -241,7 +242,7 @@ function CheckoutForm() {
       }
     }
     if (belowMin) {
-      setError(`Minimum order is £${minOrder.toFixed(2)}.`);
+      setError(`Minimum order for delivery is £${minOrder.toFixed(2)}. Choose collection, or add a little more.`);
       return false;
     }
     setError('');
