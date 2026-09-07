@@ -1099,6 +1099,30 @@ app.get('/api/settings', async (req, res) => {
   }
 });
 
+// Rename the shop (manager). The name is what the storefront banner, receipts,
+// prep tickets and order emails all say, and until now it was frozen at
+// whatever was typed at sign-up (Korakot, 7 Sep). The slug is deliberately NOT
+// editable here: it is the shop's address, and changing it would break every
+// link, bookmark and till already pointing at the old one.
+app.put('/api/admin/shop', requireAuth, requireManager, async (req, res) => {
+  try {
+    const shopId = await resolveShopId(req);
+    if (!shopId) return res.status(404).json({ error: 'Shop not found' });
+    const name = String(req.body?.name ?? '').trim().replace(/\s+/g, ' ');
+    if (!name) return res.status(400).json({ error: 'Give the shop a name' });
+    if (name.length > 200) return res.status(400).json({ error: 'Shop name is too long (200 characters max)' });
+    const { rows } = await pool.query(
+      `UPDATE shops SET name = $2 WHERE id = $1 RETURNING id, name, slug`,
+      [shopId, name]
+    );
+    if (!rows[0]) return res.status(404).json({ error: 'Shop not found' });
+    res.json(rows[0]);
+  } catch (err) {
+    console.error('[admin/shop PUT]', err.message);
+    res.status(500).json({ error: 'Failed to save the shop name' });
+  }
+});
+
 // Public category list (ordered).
 app.get('/api/categories', async (req, res) => {
   try {

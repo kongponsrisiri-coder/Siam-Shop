@@ -20,6 +20,29 @@ export const BRAND_PRESETS = [
   { name: 'Plum & Blush', primary: '#3B1F3B', accent: '#E7A3B0' },
 ];
 
+// --- derived colours -------------------------------------------------------
+// A shop sets two colours; the UI needs a few more. Rather than ask the owner
+// for them, derive them so a brand always paints a coherent screen.
+function hexToRgb(hex) {
+  let h = String(hex || '').trim().replace('#', '');
+  if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
+  const n = parseInt(h, 16);
+  return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
+}
+// WCAG relative luminance, used only to choose readable text over a colour.
+export function luminance(hex) {
+  const { r, g, b } = hexToRgb(hex);
+  const c = [r, g, b].map((v) => { const x = v / 255; return x <= 0.03928 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4; });
+  return 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+}
+// Ink that stays legible on a brand colour, so a pale brand does not produce
+// white-on-cream buttons and a dark one does not produce black-on-navy.
+export function readableInk(hex) { return luminance(hex) > 0.5 ? '#1f2328' : '#ffffff'; }
+export function rgba(hex, alpha) {
+  const { r, g, b } = hexToRgb(hex);
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
 const HEX = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i;
 export const isHex = (v) => typeof v === 'string' && HEX.test(v.trim());
 const DATA_IMG = /^data:image\/(png|jpeg|webp|gif|svg\+xml);base64,[A-Za-z0-9+/=]+$/;
@@ -43,6 +66,19 @@ export function applyBrandTheme(settings) {
     const root = document.documentElement;
     root.style.setProperty('--brand-primary', state.primary);
     root.style.setProperty('--brand-accent', state.accent);
+    // Buttons, active chips and links used a fixed Action Red, so a branded
+    // shop got its own header above pink controls (Korakot, 7 Sep). They now
+    // follow the shop's primary, with ink picked for contrast. A shop that has
+    // set no brand colour keeps Action Red, because these stay unset.
+    const branded = isHex(s.brand_primary);
+    if (branded) {
+      root.style.setProperty('--brand-action', state.primary);
+      root.style.setProperty('--brand-action-ink', readableInk(state.primary));
+      root.style.setProperty('--brand-tint', rgba(state.primary, 0.08));
+    } else {
+      for (const v of ['--brand-action', '--brand-action-ink', '--brand-tint']) root.style.removeProperty(v);
+    }
+    root.style.setProperty('--brand-accent-soft', rgba(state.accent, 0.3));
     try { window.dispatchEvent(new CustomEvent(EVENT, { detail: getBrand() })); } catch {}
   }
   return getBrand();
