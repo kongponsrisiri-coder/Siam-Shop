@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api, auth, staffSession } from '../api.js';
 import { Logo } from '../components/Logo.jsx';
+import CashPad from '../components/CashPad.jsx';
 import OptionPicker from '../components/OptionPicker.jsx';
 import StaffGate, { StaffChip } from '../components/StaffGate.jsx';
 import PostalOrders from '../components/PostalOrders.jsx';
@@ -126,10 +127,6 @@ export default function TillScreen() {
   const basketDiscAmount = useMemo(() => (!basketDiscount ? 0 : basketDiscount.type === 'percent' ? linesNet * Math.min(100, basketDiscount.value) / 100 : Math.min(basketDiscount.value, linesNet)), [basketDiscount, linesNet]);
   const subtotal = useMemo(() => +(linesNet - basketDiscAmount).toFixed(2), [linesNet, basketDiscAmount]);
   const totalDiscount = useMemo(() => +(basket.reduce((s, i) => s + lineDisc(i), 0) + basketDiscAmount).toFixed(2), [basket, basketDiscAmount]);
-  const change = useMemo(() => {
-    const t = Number(tendered);
-    return payment === 'cash' && t >= subtotal ? t - subtotal : 0;
-  }, [tendered, subtotal, payment]);
   function setLineDiscount(key, d) {
     setBasket((prev) => prev.map((i) => (i.key === key ? { ...i, discount: d } : i)));
   }
@@ -483,15 +480,13 @@ export default function TillScreen() {
               <div style={{ marginTop: 10 }}>
                 <label>Cash received</label>
                 <input
-                  type="number"
+                  type="text"
                   inputMode="decimal"
                   placeholder={subtotal.toFixed(2)}
                   value={tendered}
-                  onChange={(e) => setTendered(e.target.value)}
+                  onChange={(e) => setTendered(e.target.value.replace(/[^0-9.]/g, ''))}
                 />
-                {tendered !== '' && Number(tendered) >= subtotal && (
-                  <div className="till-change">Change: <strong>{money(change)}</strong></div>
-                )}
+                <CashPad total={subtotal} value={tendered} onChange={setTendered} money={money} />
               </div>
             )}
           </div>
