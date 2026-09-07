@@ -59,19 +59,22 @@ const POPPING_BOBA = {
   options: [{ name: 'Lychee', price_delta: 0, is_default: true }, { name: 'Strawberry', price_delta: 0 }, { name: 'Mango', price_delta: 0 }],
 };
 
+// The counter sits at the FRONT of the till's category bar and stays together:
+// a cashier ringing a lunch box should never hunt between Japanese and Korean.
+// Grocery categories start at 10 (see scripts/load-chapinto.mjs).
 const CATALOGUE = [
-  { category: 'Lunch Boxes', availability: LUNCH, items: [
+  { category: 'Lunch Boxes', sort_order: 1, availability: LUNCH, items: [
     { name: 'Rice Lunch Box', price: 8.95, groups: [SIZE_MED_LARGE, TOPPINGS, ADD_ONS] },
     { name: 'Pud-Thai Noodle', price: 8.95, groups: [SIZE_MED_LARGE, ADD_ONS] },
     { name: 'Spicy Drunken Noodle', price: 8.95, groups: [SIZE_MED_LARGE, ADD_ONS] },
     { name: 'Spicy Chilli Basil Pork Noodle', price: 8.95, groups: [ADD_ONS] },
   ] },
-  { category: 'Nibbles', availability: LUNCH, items: [
+  { category: 'Nibbles', sort_order: 2, availability: LUNCH, items: [
     { name: 'Deep-Fried Chicken Gyoza', price: 4.5, groups: [] },
     { name: 'Vegetable Spring Rolls', price: 4.5, groups: [] },
     { name: 'Mixed Prawn Crackers', price: 4.75, groups: [] },
   ] },
-  { category: 'Boba & Dessert', availability: BOBA_HOURS, items: [
+  { category: 'Boba & Dessert', sort_order: 3, availability: BOBA_HOURS, items: [
     { name: 'Okinawa Brown Tiger', price: 5.25, groups: [SIZE_REG_LARGE, BROWN_SUGAR_BOBA] },
     { name: 'Extreme Taro Fudge', price: 5.25, groups: [SIZE_REG_LARGE, BROWN_SUGAR_BOBA] },
     { name: 'Caramel Thai Tea', price: 5.25, groups: [SIZE_REG_LARGE, BROWN_SUGAR_BOBA] },
@@ -122,9 +125,10 @@ async function main() {
 
   for (const group of CATALOGUE) {
     let cat = (existingCats || []).find((c) => c.name.toLowerCase() === group.category.toLowerCase());
-    if (cat) await api('PUT', `/api/admin/categories/${cat.id}`, { name: group.category, availability: group.availability });
-    else cat = await api('POST', '/api/admin/categories', { name: group.category, availability: group.availability });
-    console.log(`  category ${group.category} → #${cat.id}`);
+    const catBody = { name: group.category, availability: group.availability, sort_order: group.sort_order };
+    if (cat) await api('PUT', `/api/admin/categories/${cat.id}`, catBody);
+    else cat = await api('POST', '/api/admin/categories', catBody);
+    console.log(`  category ${group.category} (position ${group.sort_order}) → #${cat.id}`);
 
     for (const item of group.items) {
       const body = {
@@ -144,6 +148,7 @@ async function main() {
     }
   }
   console.log(`\n✅ ${created} created, ${updated} updated. Lunch 12:30–15:00 Mon–Sat · Boba 10:30–18:00 daily.`);
+  console.log('   The three counter categories sit first on the till, in service order.');
   console.log('   Confirm with the client: the full rice-box topping list (their menu hides some behind "show more").');
 }
 main().catch((e) => { console.error('✗', e.message); process.exit(1); });

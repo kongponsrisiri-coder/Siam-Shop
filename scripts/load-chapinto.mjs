@@ -26,6 +26,11 @@ const DIR = args.find((a) => !a.startsWith('--')) || path.join(process.cwd(), 'o
 const APPLY = args.includes('--apply');
 const REPLACE = args.includes('--replace');
 const PHOTOS = !args.includes('--no-photos');
+// Clearing categories the previous catalogue left empty is implied by --replace,
+// but also available on its own so a tidy-up needs no photo re-upload.
+const TIDY = args.includes('--tidy-categories') || args.includes('--replace');
+// Re-file the category bar without touching a single product or photo.
+const CATS_ONLY = args.includes('--categories-only');
 const SHOP = (() => { const i = args.indexOf('--shop'); return i >= 0 ? args[i + 1] : 'demo'; })();
 
 let token = '';
@@ -64,6 +69,27 @@ function parseCsv(text) {
 
 const mimeOf = (f) => (/\.png$/i.test(f) ? 'image/png' : /\.webp$/i.test(f) ? 'image/webp' : 'image/jpeg');
 
+// Shelf order for the till's category bar. The counter (Lunch Boxes, Nibbles,
+// Boba & Dessert) takes 1–3 in scripts/seed-chapinto-food.mjs, so grocery
+// starts at 10: staples first, catch-all last. Anything unlisted follows.
+const GROCERY_ORDER = ['Rice', 'Noodles', 'Spices & Curry Pastes', 'Sauces & Oils', 'Drinks', 'Snacks', 'Japanese', 'Korean', 'Store Cupboard', 'Other Asian Ingredients'];
+const sortFor = (name) => { const i = GROCERY_ORDER.indexOf(name); return i >= 0 ? 10 + i : 90; };
+
+// A replaced catalogue leaves the old shop's categories behind with nothing in
+// them, which is just clutter on the till's category bar. Clear the empty ones.
+async function tidyCategories() {
+  const nowProducts = (await api('GET', '/api/admin/products')) || [];
+  const used = new Set(nowProducts.map((p) => p.category_id).filter(Boolean));
+  const allCats = (await api('GET', '/api/categories')) || [];
+  const orphans = allCats.filter((c) => !used.has(c.id));
+  for (const c of orphans) {
+    try { await api('DELETE', `/api/admin/categories/${c.id}`); console.log(`  removed empty category "${c.name}"`); }
+    catch (e) { console.log(`  ! could not remove "${c.name}": ${e.message}`); }
+  }
+  if (orphans.length) console.log(`  cleared ${orphans.length} empty categories left by the previous catalogue`);
+  return orphans.length;
+}
+
 async function main() {
   if (!PASSWORD) { console.error('ADMIN_PASSWORD is required.'); process.exit(1); }
   const csvPath = path.join(DIR, 'chapinto-products.csv');
@@ -76,6 +102,7 @@ async function main() {
   console.log(`  ${rows.length} products · ${cats.length} categories · ${withPhoto} local photos`);
   console.log(`  categories: ${cats.join(', ')}`);
   if (REPLACE) console.log('  --replace: every existing product in this shop will be DELETED first (backed up to JSON).');
+  if (TIDY) console.log('  categories left empty by the previous catalogue will be removed.');
   if (!APPLY) { console.log('\n[DRY RUN] Nothing written. Add --apply to write.'); return; }
 
   ({ token } = await api('POST', '/api/admin/login', { password: PASSWORD }));
@@ -100,10 +127,17 @@ async function main() {
   const catRows = (await api('GET', '/api/categories')) || [];
   const catId = new Map(catRows.map((c) => [c.name.toLowerCase(), c.id]));
   for (const name of cats) {
-    if (catId.has(name.toLowerCase())) continue;
-    const c = await api('POST', '/api/admin/categories', { name });
+    const existingId = catId.get(name.toLowerCase());
+    if (existingId) { await api('PUT', `/api/admin/categories/${existingId}`, { name, sort_order: sortFor(name) }); continue; }
+    const c = await api('POST', '/api/admin/categories', { name, sort_order: sortFor(name) });
     catId.set(name.toLowerCase(), c.id);
-    console.log(`  category ${name} → #${c.id}`);
+    console.log(`  category ${name} (position ${sortFor(name)}) → #${c.id}`);
+  }
+
+  if (CATS_ONLY) {
+    if (TIDY) await tidyCategories();
+    console.log('\n✅ Category order updated. No products were touched.');
+    return;
   }
 
   // 3. Products (+ photo).
@@ -143,6 +177,8 @@ async function main() {
     }
     if ((i + 1) % 25 === 0) console.log(`  ${i + 1}/${rows.length}`);
   }
+
+  if (TIDY) await tidyCategories();
 
   console.log(`\n✅ ${created} created, ${updated} updated · ${photos} photos${photoFail ? `, ${photoFail} photo failures` : ''}`);
   if (noPrice) console.log(`   ${noPrice} products had no price on the source site — check them in Admin → Products.`);
