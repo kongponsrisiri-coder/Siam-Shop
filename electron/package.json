@@ -1,7 +1,7 @@
 {
   "name": "siamshop-electron",
   "version": "0.1.0",
-  "description": "SiamShop desktop till — staff surfaces (Till · Prep · Admin) for Thai grocery shops",
+  "description": "SiamShop desktop till \u2014 staff surfaces (Till \u00b7 Prep \u00b7 Admin) for Thai grocery shops",
   "main": "main.js",
   "private": true,
   "scripts": {
@@ -35,8 +35,18 @@
     "mac": {
       "icon": "build/icon.png",
       "target": [
-        { "target": "dmg", "arch": ["arm64"] },
-        { "target": "zip", "arch": ["arm64"] }
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64"
+          ]
+        },
+        {
+          "target": "zip",
+          "arch": [
+            "arm64"
+          ]
+        }
       ],
       "category": "public.app-category.business",
       "hardenedRuntime": true,
@@ -50,7 +60,12 @@
     "win": {
       "icon": "build/icon.png",
       "target": [
-        { "target": "nsis", "arch": ["x64"] }
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
       ]
     },
     "nsis": {
@@ -75,5 +90,6 @@
   },
   "dependencies": {
     "electron-updater": "^6.3.9"
-  }
+  },
+  "author": "Korakot Kongponsrisiri <info@siamepos.co.uk>"
 }
