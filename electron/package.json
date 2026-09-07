@@ -1,6 +1,6 @@
 {
   "name": "siamshop-electron",
-  "version": "0.1.9",
+  "version": "0.1.10",
   "description": "SiamShop desktop till — staff surfaces (Till · Prep · Admin) for Thai grocery shops",
   "main": "main.js",
   "private": true,
