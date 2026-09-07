@@ -10,3 +10,4 @@ client/dist/
 scripts/products.json
 client/dist-electron/
 client/.smoke-profile/
+out/

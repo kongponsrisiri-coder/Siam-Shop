@@ -1,0 +1,12 @@
+# Cha & Pinto Box marketing site (Sandy's design) + live SiamShop data.
+# Netlify: set the site's "Base directory" to site/chapinto. No build step —
+# it is static; siamshop.js pulls products from the SiamShop API at runtime.
+[build]
+  publish = "."
+  command = ""
+
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Frame-Options = "SAMEORIGIN"
+    Referrer-Policy = "strict-origin-when-cross-origin"
