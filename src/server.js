@@ -150,6 +150,12 @@ async function requireAuth(req, res, next) {
   if (!payload || payload.role === 'customer' || payload.purpose === 'approve') {
     return res.status(401).json({ error: 'Not authenticated — please sign in again.' });
   }
+  // First-time PIN not yet changed (Krit, v0.1.3 review): the token itself is
+  // restricted — only "who am I" and "change my PIN" work until a real PIN is set,
+  // so closing the app mid-setup can never leave a manager on PIN 2526.
+  if (payload.mcp && !((req.method === 'GET' && req.path === '/api/staff/me') || (req.method === 'POST' && req.path === '/api/staff/change-pin'))) {
+    return res.status(403).json({ error: 'Set your own PIN before using the till.', code: 'pin_change_required' });
+  }
   if (!roleAllows(payload.role, req.method, req.path)) {
     return res.status(403).json({ error: 'Your staff role cannot do that — ask a manager.' });
   }
@@ -777,7 +783,7 @@ app.post('/api/staff/login', pinLimiter, async (req, res) => {
     await pool.query(`UPDATE staff SET last_login_at = NOW(), pin_lookup = COALESCE(pin_lookup, $2) WHERE id = $1`, [hit.id, pinLookup(shopId, pin)]);
     const exp = Date.now() + TOKEN_TTL_MS;
     // shop is bound into the token — requireAuth rejects use against another shop.
-    const token = signToken({ role: hit.role, name: hit.name, sid: hit.id, shop: shopId, exp });
+    const token = signToken({ role: hit.role, name: hit.name, sid: hit.id, shop: shopId, exp, ...(hit.must_change_pin ? { mcp: true } : {}) });
     res.json({ token, role: hit.role, name: hit.name, sid: hit.id, expiresAt: exp, must_change_pin: !!hit.must_change_pin });
   } catch (err) {
     console.error('[staff/login]', err.message);

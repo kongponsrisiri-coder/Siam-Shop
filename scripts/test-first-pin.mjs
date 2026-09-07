@@ -30,6 +30,15 @@ check('exactly one staff row was created', staffList.length === 1 && staffList[0
 r = await req('POST', '/api/staff/login', { pin: '2526' });
 check('2526 again still works (not changed yet), still must_change_pin', r.status === 200 && r.data.must_change_pin === true);
 
+console.log('— the bootstrap token is restricted until the PIN is changed (Krit)');
+const prod = (await req('POST', '/api/admin/products', { name: 'Pin Test Item', price: 1, stock_qty: 5 }, owner)).data;
+r = await req('POST', '/api/sales', { items: [{ product_id: prod.id, qty: 1 }], payment_method: 'cash' }, firstTok);
+check('bootstrap token → POST /api/sales 403 pin_change_required', r.status === 403 && r.data.code === 'pin_change_required', r.data);
+r = await req('GET', '/api/admin/orders', null, firstTok);
+check('bootstrap token → GET /api/admin/orders 403 too (manager role does not help)', r.status === 403 && r.data.code === 'pin_change_required', r.data);
+r = await req('GET', '/api/staff/me', null, firstTok);
+check('bootstrap token → GET /api/staff/me allowed', r.status === 200);
+
 console.log('— forced change');
 r = await req('POST', '/api/staff/change-pin', { new_pin: '2526' }, firstTok);
 check('new PIN = 2526 → 400', r.status === 400);
@@ -42,8 +51,15 @@ check('owner (password) token cannot change a PIN → 400', r.status === 400, r.
 r = await req('POST', '/api/staff/change-pin', { new_pin: '4820', name: 'Korakot' }, firstTok);
 check('4820 + name → new token, name Korakot, must_change_pin false', r.status === 200 && r.data.name === 'Korakot' && r.data.role === 'manager' && r.data.must_change_pin === false && r.data.token, r.data);
 const newTok = r.data.token;
+r = await req('POST', '/api/sales', { items: [{ product_id: prod.id, qty: 1 }], payment_method: 'cash' }, newTok);
+check('token from change-pin → POST /api/sales 201', r.status === 201, r.data);
+r = await req('POST', '/api/sales', { items: [{ product_id: prod.id, qty: 1 }], payment_method: 'cash' }, firstTok);
+check('old bootstrap token stays restricted (403) even after the change', r.status === 403 && r.data.code === 'pin_change_required');
 r = await req('POST', '/api/staff/login', { pin: '4820' });
 check('sign in with 4820 → manager Korakot, no forced change', r.status === 200 && r.data.name === 'Korakot' && r.data.must_change_pin === false, r.data);
+r = await req('POST', '/api/sales', { items: [{ product_id: prod.id, qty: 1 }], payment_method: 'cash' }, r.data.token);
+check('fresh 4820 token → sale 201', r.status === 201);
+await req('DELETE', `/api/admin/products/${prod.id}`, null, owner);
 r = await req('POST', '/api/staff/login', { pin: '2526' });
 check('2526 is dead once the shop has staff → 401', r.status === 401, r.data);
 r = await req('GET', '/api/staff/me', null, newTok);

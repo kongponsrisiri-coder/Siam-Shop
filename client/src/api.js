@@ -59,6 +59,14 @@ async function request(path, { method = 'GET', body, authed = false, customerAut
     const msg = (data && data.error) || `Request failed (${res.status})`;
     const err = new Error(msg);
     err.status = res.status;
+    err.code = data && data.code;
+    // First-time PIN not changed yet (server-enforced): drop the restricted
+    // sign-in and go back to the pad — entering 2526 again lands on the
+    // "set your own PIN" screen. Covers the web till and stale desktop sessions.
+    if (res.status === 403 && err.code === 'pin_change_required' && typeof window !== 'undefined' && !path.startsWith('/api/staff/')) {
+      try { auth.clear(); staffSession.clear(); } catch {}
+      window.location.reload();
+    }
     throw err;
   }
   return data;
