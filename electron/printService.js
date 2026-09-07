@@ -160,6 +160,8 @@ function buildZReport(z, shopName = 'SiamShop') {
     col2(`Card sales`, money(z.sales?.card)), lf(),
     col2(`Sales (${z.sales?.count || 0} / ${z.sales?.items || 0} items)`, money(z.sales?.gross)), lf(),
     col2(`Refunds (${z.refunds?.count || 0})`, '-' + money(z.refunds?.total)), lf(),
+    Number(z.voids?.count) ? [col2(`Voids before payment (${z.voids.count})`, money(z.voids.total)), lf()] : [],
+    Number(z.wastage?.qty) ? [col2(`Wastage written off (${z.wastage.qty})`, money(z.wastage.value)), lf()] : [],
     Number(z.discounts?.total) ? [col2(`Discounts (${z.discounts.count})`, '-' + money(z.discounts.total)), lf()] : [],
     CMD.BOLD_ON, col2('NET TAKINGS', money(z.net)), CMD.BOLD_OFF, lf(),
     rule(), lf(),
@@ -174,6 +176,7 @@ function buildZReport(z, shopName = 'SiamShop') {
     ] : [],
     rule(), lf(),
     z.online?.count ? [txt(`Online orders paid in shift: ${z.online.count} (${money(z.online.gross)}) - not in drawer`), lf()] : [],
+    Number(z.refunds?.stripe) ? [txt(`Online (Stripe) refunds: ${money(z.refunds.stripe)} - not in drawer`), lf()] : [],
     z.notes ? wrap('Notes: ' + z.notes, LINE_WIDTH).map((l) => [txt(l), lf()]) : [],
     lf(), CMD.ALIGN_CENTER, txt(`Printed ${fmt(new Date())}`), lf(3), CMD.CUT,
   ]);

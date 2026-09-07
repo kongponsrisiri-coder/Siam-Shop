@@ -84,7 +84,18 @@ function constructWebhookEvent(rawBody, signature) {
   return stripe.webhooks.constructEvent(rawBody, signature, secret);
 }
 
+// Refund (full or partial) against the payment intent of a paid Checkout
+// Session (SIAMSHOP-REFUND-001). amountPence omitted = full refund.
+async function refundPayment(sessionId, amountPence) {
+  const stripe = getStripe();
+  const session = await stripe.checkout.sessions.retrieve(sessionId);
+  const pi = typeof session.payment_intent === 'string' ? session.payment_intent : session.payment_intent?.id;
+  if (!pi) throw new Error('No payment intent on this session');
+  return stripe.refunds.create({ payment_intent: pi, ...(amountPence ? { amount: Math.round(amountPence) } : {}) });
+}
+
 module.exports = {
+  refundPayment,
   getStripe,
   isConfigured,
   createCheckoutSession,

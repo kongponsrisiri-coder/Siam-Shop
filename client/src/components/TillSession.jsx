@@ -58,6 +58,8 @@ export function ZSummary({ z }) {
       {row('Card sales', money(z.sales?.card))}
       {row(`Sales (${z.sales?.count || 0} · ${z.sales?.items || 0} items)`, money(z.sales?.gross))}
       {row(`Refunds (${z.refunds?.count || 0})`, '−' + money(z.refunds?.total))}
+      {Number(z.voids?.count) > 0 && row(`Voids before payment (${z.voids.count})`, money(z.voids.total))}
+      {Number(z.wastage?.qty) > 0 && row(`Wastage written off (${z.wastage.qty})`, money(z.wastage.value))}
       {Number(z.discounts?.total) > 0 && row(`Discounts (${z.discounts.count})`, '−' + money(z.discounts.total))}
       {row('Net takings', money(z.net), true)}
       <hr />

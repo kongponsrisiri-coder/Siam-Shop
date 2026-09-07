@@ -178,8 +178,13 @@ export const api = {
     }),
   adminMarkPaid: (id) =>
     request(`/api/admin/orders/${id}/mark-paid`, { method: 'POST', authed: true }),
-  adminCancelOrder: (id) =>
-    request(`/api/admin/orders/${id}/cancel`, { method: 'POST', authed: true }),
+  adminCancelOrder: (id, body) =>
+    request(`/api/admin/orders/${id}/cancel`, { method: 'POST', body, authed: true }),
+  // Refunds + voids (SIAMSHOP-REFUND-001)
+  adminRefundOrder: (id, body) => request(`/api/admin/orders/${id}/refund`, { method: 'POST', body, authed: true }),
+  adminOrderRefunds: (id) => request(`/api/admin/orders/${id}/refunds`, { authed: true }),
+  refundReasons: () => request('/api/refund-reasons'),
+  tillVoid: (body) => request('/api/till/void', { method: 'POST', body, authed: true }),
   // SIAMSHOP-504 — Click & Collect lifecycle
   adminMarkReady: (id) => request(`/api/admin/orders/${id}/ready`, { method: 'POST', authed: true }),
   adminMarkCollected: (id) => request(`/api/admin/orders/${id}/collected`, { method: 'POST', authed: true }),

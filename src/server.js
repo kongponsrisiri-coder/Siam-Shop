@@ -128,8 +128,8 @@ const ROLE_ALLOW = {
     ['GET', /^\/api\/admin\/me$/], ['GET', /^\/api\/admin\/products$/], ['GET', /^\/api\/admin\/orders(\/|$)/],
     ['*', /^\/api\/sales(\/|$)/], ['*', /^\/api\/prep(\/|$)/], ['GET', /^\/api\/products\/lookup$/],
     ['*', /^\/api\/stock\/(receive|stocktake|goods-in-batch|scan-invoice|movements)$/], ['GET', /^\/api\/staff\/me$/],
-    ['*', /^\/api\/till\/(\/|$)/], ['*', /^\/api\/till\/session(\/|$)/], ['GET', /^\/api\/till\/sessions(\/|$)/],
-    ['POST', /^\/api\/admin\/orders\/\d+\/(ready|collected|dispatch|label-printed)$/],
+    ['*', /^\/api\/till\/(\/|$)/], ['*', /^\/api\/till\/session(\/|$)/], ['POST', /^\/api\/till\/void$/], ['GET', /^\/api\/till\/sessions(\/|$)/],
+    ['POST', /^\/api\/admin\/orders\/\d+\/(ready|collected|dispatch|label-printed|refund)$/], ['GET', /^\/api\/admin\/orders\/\d+\/refunds$/],
   ],
   prep: [
     ['GET', /^\/api\/admin\/me$/], ['*', /^\/api\/prep(\/|$)/], ['GET', /^\/api\/staff\/me$/],
@@ -180,6 +180,10 @@ function pinLookup(shopId, pin) {
 // a manager taps their PIN on the cashier's screen to approve ONE money action.
 // The token is not a session: purpose='approve', 60 s TTL, single use (jti).
 const APPROVAL_TTL_MS = 60 * 1000;
+// Accepted risk (Krit, A4 review): this set is in-memory, so a captured token
+// could be replayed in the ≤60 s after a server restart. Single Railway instance
+// + 60 s window + needs a cashier sniffing their own manager's token — not worth
+// a table. Revisit only if SiamShop ever runs >1 replica.
 const _usedApprovals = new Map(); // jti → exp
 function issueApproval(staff) {
   const jti = crypto.randomBytes(12).toString('base64url');
@@ -1990,21 +1994,7 @@ app.post('/api/sales', requireAuth, async (req, res) => {
     // Every paid till sale belongs to a session (SIAMSHOP-TILL-001, Krit's review):
     // if nobody opened the till yet, AUTO-OPEN one with float 0 — never block a
     // queue, never leave cash outside a Z. The Till then asks for the float.
-    let { rows: sess } = await client.query(
-      `SELECT id, auto_opened, float_amount FROM till_sessions WHERE shop_id = $1 AND status = 'open' ORDER BY opened_at DESC LIMIT 1`, [shopId]
-    );
-    let sessionAutoOpened = false;
-    if (!sess[0]) {
-      const ins = await client.query(
-        `INSERT INTO till_sessions (shop_id, opened_by, opened_by_sid, float_amount, auto_opened)
-         VALUES ($1,$2,$3,0,TRUE)
-         ON CONFLICT (shop_id) WHERE status = 'open' DO NOTHING
-         RETURNING id, auto_opened, float_amount`,
-        [shopId, staff, req.auth?.sid || null]
-      );
-      if (ins.rows[0]) { sess = ins.rows; sessionAutoOpened = true; }
-      else ({ rows: sess } = await client.query(`SELECT id, auto_opened, float_amount FROM till_sessions WHERE shop_id = $1 AND status = 'open' LIMIT 1`, [shopId]));
-    }
+    const { sess, autoOpened: sessionAutoOpened } = await ensureOpenSession(client, shopId, staff, req.auth?.sid);
     const sessionId = sess[0]?.id || null;
     const sessionNeedsFloat = !!sess[0]?.auto_opened && Number(sess[0]?.float_amount) === 0;
     const orderRes = await client.query(
@@ -2398,9 +2388,9 @@ app.get('/api/admin/orders/:id', requireAuth, async (req, res) => {
     );
     if (!rows[0]) return res.status(404).json({ error: 'Order not found' });
     const { rows: items } = await pool.query(
-      `SELECT name_snapshot, price_snapshot, qty, line_total, options_snapshot, options_total,
+      `SELECT id, name_snapshot, price_snapshot, qty, refunded_qty, line_total, options_snapshot, options_total,
               discount_type, discount_value, discount_amount, discount_reason
-       FROM order_items WHERE order_id = $1`,
+       FROM order_items WHERE order_id = $1 ORDER BY id`,
       [req.params.id]
     );
     res.json({ ...rows[0], items });
@@ -2517,51 +2507,222 @@ app.get('/api/admin/carriers', requireAuth, (req, res) => {
   res.json(carriers.list());
 });
 
-// Cancel an order (e.g. customer never paid). If it was already paid, restore
-// the stock and write refund movements; otherwise just mark it cancelled.
+// ---------------------------------------------------------------------------
+// Refunds + voids (SIAMSHOP-REFUND-001)
+// ---------------------------------------------------------------------------
+const REFUND_REASONS = ['Wastage', 'Damaged', 'Wrong item', 'Customer changed mind', 'Faulty'];
+// Returned goods go back on the shelf for these reasons; the rest are written off.
+const RESTOCK_REASONS = new Set(['Wrong item', 'Customer changed mind']);
+const VOID_REASONS = REFUND_REASONS;
+
+// Refund a paid order (full when `items` is omitted, else the listed
+// {order_item_id, qty}). Money: cash/card are recorded (card = shop's own
+// terminal), stripe = real refund on the online payment. Stock: restock or
+// writeoff by reason (writeoff = +qty 'refund' then −qty 'writeoff' so wastage
+// is visible in the ledger). Returns { refund, order }.
+async function refundOrder(client, shopId, order, { items, reason, method, staff, approvedBy, note, sid }) {
+  if (!REFUND_REASONS.includes(reason)) throw httpError(400, `Pick a refund reason (${REFUND_REASONS.join(', ')})`);
+  if (order.payment_status !== 'paid') throw httpError(400, 'Only paid orders can be refunded');
+  const { rows: lines } = await client.query(
+    `SELECT oi.id, oi.product_id, oi.qty, oi.refunded_qty, oi.line_total, oi.name_snapshot, p.track_stock, p.price
+     FROM order_items oi LEFT JOIN products p ON p.id = oi.product_id WHERE oi.order_id = $1 ORDER BY oi.id`, [order.id]
+  );
+  // Which lines / quantities
+  let picks;
+  if (Array.isArray(items) && items.length) {
+    picks = items.map((it) => {
+      const ln = lines.find((l) => l.id === Number(it.order_item_id));
+      if (!ln) throw httpError(400, `Unknown item ${it.order_item_id} on this order`);
+      const qty = parseInt(it.qty, 10);
+      if (!Number.isInteger(qty) || qty <= 0) throw httpError(400, `Invalid quantity for ${ln.name_snapshot}`);
+      if (qty > ln.qty - ln.refunded_qty) throw httpError(400, `${ln.name_snapshot}: only ${ln.qty - ln.refunded_qty} left to refund`);
+      return { ln, qty };
+    });
+  } else {
+    picks = lines.filter((l) => l.qty - l.refunded_qty > 0).map((ln) => ({ ln, qty: ln.qty - ln.refunded_qty }));
+    if (!picks.length) throw httpError(400, 'Nothing left to refund on this order');
+  }
+  // Money per line = proportional share of the (discounted) line total; a full
+  // refund also returns any basket discount / delivery already in the total.
+  let amount = 0;
+  for (const p of picks) amount += Number(p.ln.line_total) * p.qty / p.ln.qty;
+  const remainingBefore = Number(order.total) - Number(order.refunded_amount || 0);
+  const fullNow = picks.length === lines.filter((l) => l.qty - l.refunded_qty > 0).length && picks.every((p) => p.qty === p.ln.qty - p.ln.refunded_qty);
+  if (fullNow) amount = remainingBefore; // exact: whatever the customer has left to get back
+  amount = +Math.min(amount, remainingBefore).toFixed(2);
+  if (amount <= 0) throw httpError(400, 'Nothing left to refund');
+
+  const payMethod = ['cash', 'card', 'stripe'].includes(method) ? method : (order.payment_method === 'stripe' ? 'stripe' : order.payment_method === 'card' ? 'card' : 'cash');
+  let stripeRefundId = null;
+  if (payMethod === 'stripe') {
+    if (!stripeService.isConfigured()) throw httpError(503, 'Card payments are not configured — refund this order through your Stripe dashboard or record a cash refund.');
+    if (!order.stripe_payment_intent_id) throw httpError(400, 'This order has no Stripe payment to refund');
+    const rf = await stripeService.refundPayment(order.stripe_payment_intent_id, Math.round(amount * 100));
+    stripeRefundId = rf.id;
+  }
+  const stockAction = RESTOCK_REASONS.has(reason) ? 'restock' : 'writeoff';
+  // Drawer refunds (cash/card) live in a till session like sales do — auto-open if needed.
+  const { sess } = payMethod === 'stripe'
+    ? { sess: (await client.query(`SELECT id FROM till_sessions WHERE shop_id = $1 AND status = 'open' LIMIT 1`, [shopId])).rows }
+    : await ensureOpenSession(client, shopId, staff, sid);
+  const { rows: [refund] } = await client.query(
+    `INSERT INTO refunds (shop_id, order_id, session_id, staff, approved_by, reason, method, amount, stock_action, stripe_refund_id, note)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
+    [shopId, order.id, sess[0]?.id || null, staff, approvedBy, reason, payMethod, amount, stockAction, stripeRefundId, note || null]
+  );
+  for (const p of picks) {
+    const lineAmount = +(Number(p.ln.line_total) * p.qty / p.ln.qty).toFixed(2);
+    await client.query(`INSERT INTO refund_items (refund_id, order_item_id, qty, amount) VALUES ($1,$2,$3,$4)`, [refund.id, p.ln.id, p.qty, lineAmount]);
+    await client.query(`UPDATE order_items SET refunded_qty = refunded_qty + $2 WHERE id = $1`, [p.ln.id, p.qty]);
+    if (!p.ln.product_id || !p.ln.track_stock) continue; // made-to-order: nothing to restock
+    // Back to the shelf…
+    await client.query(`UPDATE products SET stock_qty = stock_qty + $1 WHERE id = $2`, [p.qty, p.ln.product_id]);
+    await client.query(
+      `INSERT INTO stock_movements (shop_id, product_id, change_qty, reason, ref_order_id, staff, note)
+       VALUES ($1,$2,$3,'refund',$4,$5,$6)`, [shopId, p.ln.product_id, p.qty, order.id, staff, reason]
+    );
+    if (stockAction === 'writeoff') {
+      // …and straight out again as wastage (visible in the ledger + day report).
+      await client.query(`UPDATE products SET stock_qty = stock_qty - $1 WHERE id = $2`, [p.qty, p.ln.product_id]);
+      await client.query(
+        `INSERT INTO stock_movements (shop_id, product_id, change_qty, reason, ref_order_id, staff, note)
+         VALUES ($1,$2,$3,'writeoff',$4,$5,$6)`, [shopId, p.ln.product_id, -p.qty, order.id, staff, reason]
+      );
+    }
+  }
+  const newRefunded = +(Number(order.refunded_amount || 0) + amount).toFixed(2);
+  const fully = newRefunded >= Number(order.total) - 0.005;
+  const { rows: [updated] } = await client.query(
+    `UPDATE orders SET refunded_amount = $2,
+            payment_status = CASE WHEN $3 THEN 'refunded' ELSE payment_status END,
+            refunded_at = CASE WHEN $3 THEN NOW() ELSE refunded_at END,
+            status = CASE WHEN $3 AND status NOT IN ('dispatched','completed') THEN 'cancelled' ELSE status END
+     WHERE id = $1 RETURNING *`, [order.id, newRefunded, fully]
+  );
+  return { refund: { ...refund, items: picks.map((p) => ({ order_item_id: p.ln.id, name: p.ln.name_snapshot, qty: p.qty })) }, order: updated };
+}
+
+// Open till session for the shop, auto-opening one (float 0) if none — shared by
+// sales and drawer refunds so no cash ever sits outside a Z.
+async function ensureOpenSession(client, shopId, staff, sid) {
+  let { rows: sess } = await client.query(
+    `SELECT id, auto_opened, float_amount FROM till_sessions WHERE shop_id = $1 AND status = 'open' ORDER BY opened_at DESC LIMIT 1`, [shopId]
+  );
+  let autoOpened = false;
+  if (!sess[0]) {
+    const ins = await client.query(
+      `INSERT INTO till_sessions (shop_id, opened_by, opened_by_sid, float_amount, auto_opened)
+       VALUES ($1,$2,$3,0,TRUE)
+       ON CONFLICT (shop_id) WHERE status = 'open' DO NOTHING
+       RETURNING id, auto_opened, float_amount`,
+      [shopId, staff, sid || null]
+    );
+    if (ins.rows[0]) { sess = ins.rows; autoOpened = true; }
+    else ({ rows: sess } = await client.query(`SELECT id, auto_opened, float_amount FROM till_sessions WHERE shop_id = $1 AND status = 'open' LIMIT 1`, [shopId]));
+  }
+  return { sess, autoOpened };
+}
+
+// Manager approval for ANY refund: managers/owner pass; cashiers need a one-off approval token.
+function refundApprover(req, shopId) {
+  if (req.auth?.role === 'manager' || req.auth?.role === 'admin') return null;
+  if (!req.body?.approval_token) { const e = httpError(403, 'Refunds need a manager PIN'); e.code = 'approval_required'; throw e; }
+  return consumeApproval(req.body.approval_token, shopId).name;
+}
+
+app.post('/api/admin/orders/:id/refund', requireAuth, async (req, res) => {
+  const shopId = await resolveShopId(req);
+  if (!shopId) return res.status(404).json({ error: 'Shop not found' });
+  const client = await pool.connect();
+  try {
+    const approvedBy = refundApprover(req, shopId);
+    await client.query('BEGIN');
+    const { rows } = await client.query(`SELECT * FROM orders WHERE id = $1 AND shop_id = $2 FOR UPDATE`, [req.params.id, shopId]);
+    if (!rows[0]) throw httpError(404, 'Order not found');
+    const out = await refundOrder(client, shopId, rows[0], {
+      items: req.body?.items, reason: String(req.body?.reason || ''), method: req.body?.method,
+      staff: req.auth?.name || 'Owner', approvedBy, note: req.body?.note, sid: req.auth?.sid,
+    });
+    await client.query('COMMIT');
+    res.status(201).json(out);
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    if (err.httpStatus) return res.status(err.httpStatus).json({ error: err.message, code: err.code || undefined });
+    console.error('[admin/orders refund]', err.message);
+    res.status(500).json({ error: 'Refund failed' });
+  } finally {
+    client.release();
+  }
+});
+app.get('/api/admin/orders/:id/refunds', requireAuth, async (req, res) => {
+  try {
+    const shopId = await resolveShopId(req);
+    if (!shopId) return res.status(404).json({ error: 'Shop not found' });
+    const { rows } = await pool.query(
+      `SELECT r.*, COALESCE(json_agg(json_build_object('order_item_id', ri.order_item_id, 'qty', ri.qty, 'amount', ri.amount, 'name', oi.name_snapshot) ORDER BY ri.id)
+              FILTER (WHERE ri.id IS NOT NULL), '[]') AS items
+       FROM refunds r LEFT JOIN refund_items ri ON ri.refund_id = r.id LEFT JOIN order_items oi ON oi.id = ri.order_item_id
+       WHERE r.shop_id = $1 AND r.order_id = $2 GROUP BY r.id ORDER BY r.created_at DESC`, [shopId, req.params.id]
+    );
+    res.json(rows);
+  } catch (err) {
+    console.error('[admin/orders refunds]', err.message);
+    res.status(500).json({ error: 'Failed to load refunds' });
+  }
+});
+app.get('/api/refund-reasons', (req, res) => res.json({ refund: REFUND_REASONS, void: VOID_REASONS, restock: [...RESTOCK_REASONS] }));
+
+// Void BEFORE payment (SIAMSHOP-REFUND-001): a basket line removed at the till
+// with a reason — nothing sold, nothing moved; logged for the Z and the day report.
+app.post('/api/till/void', requireAuth, async (req, res) => {
+  try {
+    const shopId = await resolveShopId(req);
+    if (!shopId) return res.status(404).json({ error: 'Shop not found' });
+    const reason = String(req.body?.reason || '');
+    const qty = parseInt(req.body?.qty, 10);
+    if (!VOID_REASONS.includes(reason)) return res.status(400).json({ error: `Pick a reason (${VOID_REASONS.join(', ')})` });
+    if (!Number.isInteger(qty) || qty <= 0) return res.status(400).json({ error: 'Invalid quantity' });
+    const { rows: sess } = await pool.query(`SELECT id FROM till_sessions WHERE shop_id = $1 AND status = 'open' LIMIT 1`, [shopId]);
+    const { rows: [v] } = await pool.query(
+      `INSERT INTO void_log (shop_id, session_id, staff, product_id, name, qty, amount, reason)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
+      [shopId, sess[0]?.id || null, req.auth?.name || 'Owner', req.body?.product_id || null, String(req.body?.name || '').slice(0, 300), qty, Number(req.body?.amount) || 0, reason]
+    );
+    res.status(201).json(v);
+  } catch (err) {
+    console.error('[till/void]', err.message);
+    res.status(500).json({ error: 'Failed to record void' });
+  }
+});
+
+// Cancel an order. Unpaid → just cancelled. Paid → a FULL refund with reason
+// (default "Customer changed mind", restock) — manager PIN rules apply.
 app.post('/api/admin/orders/:id/cancel', requireAuth, async (req, res) => {
   const shopId = await resolveShopId(req);
   if (!shopId) return res.status(404).json({ error: 'Shop not found' });
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    const { rows } = await client.query(
-      `SELECT * FROM orders WHERE id = $1 AND shop_id = $2 FOR UPDATE`,
-      [req.params.id, shopId]
-    );
+    const { rows } = await client.query(`SELECT * FROM orders WHERE id = $1 AND shop_id = $2 FOR UPDATE`, [req.params.id, shopId]);
     const order = rows[0];
     if (!order) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'Order not found' }); }
     if (order.status === 'cancelled') { await client.query('ROLLBACK'); return res.json(order); }
-
-    // If it was paid, the stock was decremented — put it back (tracked items only;
-    // made-to-order lines never moved stock, so they get no refund movement).
     if (order.payment_status === 'paid') {
-      const { rows: items } = await client.query(
-        `SELECT oi.product_id, oi.qty, p.track_stock
-         FROM order_items oi LEFT JOIN products p ON p.id = oi.product_id
-         WHERE oi.order_id = $1`, [order.id]
-      );
-      for (const it of items) {
-        if (!it.product_id || !it.track_stock) continue;
-        await client.query(
-          `UPDATE products SET stock_qty = stock_qty + $1 WHERE id = $2`,
-          [it.qty, it.product_id]
-        );
-        await client.query(
-          `INSERT INTO stock_movements (shop_id, product_id, change_qty, reason, ref_order_id, staff)
-           VALUES ($1,$2,$3,'refund',$4,$5)`,
-          [shopId, it.product_id, it.qty, order.id, req.auth?.name || 'admin']
-        );
-      }
-      await client.query(`UPDATE orders SET payment_status = 'refunded', refunded_at = NOW() WHERE id = $1`, [order.id]);
+      const approvedBy = refundApprover(req, shopId);
+      const out = await refundOrder(client, shopId, order, {
+        reason: String(req.body?.reason || 'Customer changed mind'), method: req.body?.method,
+        staff: req.auth?.name || 'Owner', approvedBy, note: req.body?.note || 'Order cancelled', sid: req.auth?.sid,
+      });
+      await client.query(`UPDATE orders SET status = 'cancelled' WHERE id = $1`, [order.id]);
+      await client.query('COMMIT');
+      return res.json({ ...out.order, status: 'cancelled', refund: out.refund });
     }
-    const { rows: updated } = await client.query(
-      `UPDATE orders SET status = 'cancelled' WHERE id = $1 RETURNING *`, [order.id]
-    );
+    const { rows: updated } = await client.query(`UPDATE orders SET status = 'cancelled' WHERE id = $1 RETURNING *`, [order.id]);
     await client.query('COMMIT');
     res.json(updated[0]);
   } catch (err) {
-    await client.query('ROLLBACK');
+    await client.query('ROLLBACK').catch(() => {});
+    if (err.httpStatus) return res.status(err.httpStatus).json({ error: err.message, code: err.code || undefined });
     console.error('[admin/orders cancel]', err.message);
     res.status(500).json({ error: 'Failed to cancel order' });
   } finally {
@@ -2679,12 +2840,21 @@ async function sessionSummary(shopId, session) {
      FROM orders WHERE shop_id = $1 AND channel = 'instore' AND session_id = $2 AND payment_status IN ('paid','refunded')
      GROUP BY payment_method`, [shopId, session.id]
   )).rows;
-  // Refunds are counted when they HAPPEN (refunded_at inside the shift), whatever session sold the item.
+  // Refunds are counted when they HAPPEN (inside the shift), whatever session sold the item.
+  // Cash/card refunds move the drawer; stripe refunds are online money (listed, not in the drawer).
   const refunds = (await pool.query(
-    `SELECT COALESCE(payment_method,'other') AS method, COUNT(*)::int AS count, COALESCE(SUM(total),0)::numeric AS total
-     FROM orders WHERE shop_id = $1 AND channel = 'instore' AND payment_status = 'refunded'
-       AND refunded_at >= $2 AND refunded_at <= $3 GROUP BY payment_method`, win
+    `SELECT method, COUNT(*)::int AS count, COALESCE(SUM(amount),0)::numeric AS total
+     FROM refunds WHERE shop_id = $1 AND created_at >= $2 AND created_at <= $3 GROUP BY method`, win
   )).rows;
+  const voids = (await pool.query(
+    `SELECT COUNT(*)::int AS count, COALESCE(SUM(amount),0)::numeric AS total FROM void_log
+     WHERE shop_id = $1 AND created_at >= $2 AND created_at <= $3`, win
+  )).rows[0];
+  const wastage = (await pool.query(
+    `SELECT COALESCE(SUM(-sm.change_qty * COALESCE(p.price,0)),0)::numeric AS value, COALESCE(SUM(-sm.change_qty),0)::int AS qty
+     FROM stock_movements sm LEFT JOIN products p ON p.id = sm.product_id
+     WHERE sm.shop_id = $1 AND sm.reason = 'writeoff' AND sm.created_at >= $2 AND sm.created_at <= $3`, win
+  )).rows[0];
   const items = (await pool.query(
     `SELECT COALESCE(SUM(oi.qty),0)::int AS qty FROM order_items oi JOIN orders o ON o.id = oi.order_id
      WHERE o.shop_id = $1 AND o.session_id = $2 AND o.payment_status IN ('paid','refunded')`, [shopId, session.id]
@@ -2709,7 +2879,9 @@ async function sessionSummary(shopId, session) {
     opened_by: session.opened_by, closed_by: session.closed_by,
     float_amount: Number(session.float_amount),
     sales: { count: sales.reduce((a, r) => a + r.count, 0), gross: +gross.toFixed(2), cash: +cashSales.toFixed(2), card: +cardSales.toFixed(2), items: items.qty },
-    refunds: { count: refunds.reduce((a, r) => a + r.count, 0), total: +refundTotal.toFixed(2), cash: +cashRefunds.toFixed(2), card: +cardRefunds.toFixed(2) },
+    refunds: { count: refunds.reduce((a, r) => a + r.count, 0), total: +refundTotal.toFixed(2), cash: +cashRefunds.toFixed(2), card: +cardRefunds.toFixed(2), stripe: +Number(by(refunds, 'stripe').total).toFixed(2) },
+    voids: { count: voids.count, total: Number(voids.total) },
+    wastage: { qty: wastage.qty, value: Number(wastage.value) },
     discounts: discounts,
     net: +(gross - refundTotal).toFixed(2),
     online: { count: online.count, gross: Number(online.gross) },
@@ -3131,9 +3303,21 @@ app.get('/api/admin/report', requireAuth, async (req, res) => {
        FROM orders o WHERE ${WHERE} AND o.discount_amount > 0 GROUP BY o.staff ORDER BY amount DESC`, args
     )).rows;
     const discountTotal = (await pool.query(`SELECT COALESCE(SUM(o.discount_amount),0)::numeric AS amount FROM orders o WHERE ${WHERE}`, args)).rows[0];
+    // Refunds + voids + wastage (SIAMSHOP-REFUND-001) — by when they happened.
+    const RANGE = `r.shop_id = $1 AND r.created_at >= COALESCE($2::date, (date_trunc('day', now()) - interval '29 days')::date)
+       AND r.created_at < COALESCE($3::date, date_trunc('day', now())::date) + interval '1 day'`;
+    const refundsByReason = (await pool.query(`SELECT r.reason, r.stock_action, COUNT(*)::int AS count, COALESCE(SUM(r.amount),0)::numeric AS amount FROM refunds r WHERE ${RANGE} GROUP BY r.reason, r.stock_action ORDER BY amount DESC`, args)).rows;
+    const refundsTotal = (await pool.query(`SELECT COUNT(*)::int AS count, COALESCE(SUM(r.amount),0)::numeric AS amount FROM refunds r WHERE ${RANGE}`, args)).rows[0];
+    const voidsTotal = (await pool.query(`SELECT COUNT(*)::int AS count, COALESCE(SUM(r.amount),0)::numeric AS amount FROM void_log r WHERE ${RANGE}`, args)).rows[0];
+    const wastageRows = (await pool.query(
+      `SELECT COALESCE(p.name, 'deleted product') AS name, SUM(-r.change_qty)::int AS qty, COALESCE(SUM(-r.change_qty * COALESCE(p.price,0)),0)::numeric AS value
+       FROM stock_movements r LEFT JOIN products p ON p.id = r.product_id WHERE r.reason = 'writeoff' AND ${RANGE} GROUP BY p.name ORDER BY value DESC LIMIT 15`, args)).rows;
 
     res.json({
       discounts: { total: Number(discountTotal.amount), by_reason: discountsByReason, by_staff: discountsByStaff },
+      refunds: { count: refundsTotal.count, total: Number(refundsTotal.amount), by_reason: refundsByReason },
+      voids: { count: voidsTotal.count, total: Number(voidsTotal.amount) },
+      wastage: { value: wastageRows.reduce((a, w) => a + Number(w.value), 0), items: wastageRows },
       from: range.from_date,
       to: range.to_date,
       totals: {

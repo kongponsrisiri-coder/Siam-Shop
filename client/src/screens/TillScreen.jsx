@@ -155,8 +155,17 @@ export default function TillScreen() {
   function setQty(key, qty) {
     setBasket((prev) => prev.map((i) => (i.key === key ? { ...i, qty: Math.max(1, qty) } : i)));
   }
+  const [voiding, setVoiding] = useState(null); // basket line awaiting a void reason (SIAMSHOP-REFUND-001)
   function removeLine(key) {
-    setBasket((prev) => prev.filter((i) => i.key !== key));
+    const line = basket.find((i) => i.key === key);
+    if (line) setVoiding(line); else setBasket((prev) => prev.filter((i) => i.key !== key));
+  }
+  async function confirmVoid(reason) {
+    const line = voiding;
+    setVoiding(null);
+    setBasket((prev) => prev.filter((i) => i.key !== line.key));
+    // Logged for the Z / day report; nothing was sold so nothing moves.
+    api.tillVoid({ product_id: line.id, name: line.name, qty: line.qty, amount: +(lineNet(line)).toFixed(2), reason }).catch(() => {});
   }
 
   // Scan box: on Enter, try an exact barcode lookup; if no match, leave the text
@@ -439,6 +448,20 @@ export default function TillScreen() {
       )}
 
       {postOpen && <PostalOrders onClose={() => setPostOpen(false)} />}
+      {voiding && (
+        <div className="till-modal" onClick={() => setVoiding(null)} style={{ zIndex: 55 }}>
+          <div className="till-receipt" style={{ width: 380 }} onClick={(e) => e.stopPropagation()}>
+            <h3 style={{ marginTop: 0 }}>Remove {voiding.name} × {voiding.qty}</h3>
+            <p className="muted" style={{ marginTop: 0, fontSize: 13 }}>Why is it coming off the sale?</p>
+            <div className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
+              {(shopSettings?.void_reasons || ['Customer changed mind', 'Wrong item', 'Damaged', 'Wastage', 'Faulty']).map((r) => (
+                <button key={r} type="button" className="btn secondary" onClick={() => confirmVoid(r)}>{r}</button>
+              ))}
+            </div>
+            <button type="button" className="btn ghost" style={{ marginTop: 10, width: '100%' }} onClick={() => setVoiding(null)}>Keep it</button>
+          </div>
+        </div>
+      )}
       {discountModal === 'basket' && (
         <DiscountModal title="Basket discount" base={linesNet} reasons={shopSettings?.discount_reasons || ['Damaged', 'Near date', 'Staff', 'Manager goodwill', 'Price match']} initial={basketDiscount}
           onApply={(d) => { setBasketDiscount(d); setDiscountModal(null); }} onRemove={() => { setBasketDiscount(null); setDiscountModal(null); }} onClose={() => setDiscountModal(null)} />
