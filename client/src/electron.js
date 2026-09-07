@@ -12,6 +12,8 @@ export const desktop = {
   kickDrawer: () => (isElectron ? window.electron.kickDrawer() : Promise.resolve({ ok: false, error: 'not-desktop' })),
   testPrint: (printer) => (isElectron ? window.electron.testPrint(printer) : Promise.resolve({ ok: false, error: 'not-desktop' })),
   listPrinters: () => (isElectron ? window.electron.listPrinters() : Promise.resolve([])),
+  // Parcel labels (SIAMSHOP-POST-001) — HTML → OS driver, 4×6 in.
+  printLabel: (html, copies = 1) => (isElectron ? window.electron.printLabel({ html, copies }) : Promise.resolve({ ok: false, error: 'not-desktop' })),
   getConfig: () => (isElectron ? window.electron.getConfig() : Promise.resolve({})),
   saveConfig: (patch) => (isElectron ? window.electron.saveConfig(patch) : Promise.resolve({ success: false })),
   getVersion: () => (isElectron ? window.electron.getVersion() : Promise.resolve(null)),

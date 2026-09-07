@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { desktop, electronConfig } from '../../electron.js';
+import { buildLabelHtml, SAMPLE_LABEL } from '../../label.js';
 
 // "This device" (desktop till only — SIAMSHOP-ELECTRON-001): receipt printer,
 // cash drawer, app version + updates. Everything here lives in the device's
@@ -11,9 +12,11 @@ export default function DeviceSection() {
   const [msg, setMsg] = useState('');
   const [busy, setBusy] = useState(false);
   const [update, setUpdate] = useState(null);
+  const [labelPrinter, setLabelPrinter] = useState('');
+  const [labelMsg, setLabelMsg] = useState('');
 
   useEffect(() => {
-    desktop.getConfig().then((c) => { setCfg(c); if (c?.printer) setPrinter({ ...printer, ...c.printer }); }).catch(() => {});
+    desktop.getConfig().then((c) => { setCfg(c); if (c?.printer) setPrinter({ ...printer, ...c.printer }); setLabelPrinter(c?.labelPrinter || ''); }).catch(() => {});
     desktop.listPrinters().then(setOsPrinters).catch(() => {});
     desktop.onUpdateStatus((s) => setUpdate(s));
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -105,6 +108,33 @@ export default function DeviceSection() {
           <button className="btn secondary" disabled={busy} onClick={drawer}>💵 Open drawer</button>
         </div>
         {msg && <p style={{ fontSize: 13, marginTop: 8 }}>{msg}</p>}
+      </div>
+
+      <div className="panel">
+        <h3 style={{ marginTop: 0 }}>Parcel label printer (4×6 in)</h3>
+        <p className="muted" style={{ marginTop: 0, fontSize: 13 }}>
+          For postal orders. A direct-thermal 4×6 label printer installed on this device with its own driver
+          (Rollo, MUNBYN, Zebra ZD220/GK420, Brother QL-1110). Labels print through the driver, so any brand works.
+          Not app-only Bluetooth minis. Royal Mail Click &amp; Drop postage PDFs print to the same printer.
+        </p>
+        <label>Label printer</label>
+        <select value={labelPrinter} onChange={(e) => setLabelPrinter(e.target.value)}>
+          <option value="">— none —</option>
+          {osPrinters.map((p) => <option key={p.name} value={p.name}>{p.displayName}{p.isDefault ? ' (default)' : ''}</option>)}
+        </select>
+        <div className="row" style={{ marginTop: 12, gap: 8, flexWrap: 'wrap' }}>
+          <button className="btn" disabled={busy} onClick={async () => { setBusy(true); const r = await desktop.saveConfig({ label_printer: labelPrinter }); setLabelMsg(r?.success ? 'Saved.' : `Could not save: ${r?.error}`); setBusy(false); }}>Save label printer</button>
+          <button className="btn secondary" disabled={busy || !labelPrinter} onClick={async () => {
+            setBusy(true); setLabelMsg('Sending test label…');
+            try {
+              const saved = await desktop.saveConfig({ label_printer: labelPrinter });
+              if (!saved?.success) throw new Error(saved?.error || 'save failed');
+              const r = await desktop.printLabel(await buildLabelHtml(SAMPLE_LABEL), 1);
+              setLabelMsg(r?.ok ? 'Test label sent — check the printer.' : `Test failed: ${r?.error}`);
+            } catch (e) { setLabelMsg(`Test failed: ${e.message}`); } finally { setBusy(false); }
+          }}>🏷 Print test label</button>
+        </div>
+        {labelMsg && <p style={{ fontSize: 13, marginTop: 8 }}>{labelMsg}</p>}
       </div>
 
       <div className="panel">

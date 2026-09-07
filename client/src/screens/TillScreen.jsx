@@ -4,6 +4,7 @@ import { api, auth, staffSession } from '../api.js';
 import { Logo } from '../components/Logo.jsx';
 import OptionPicker from '../components/OptionPicker.jsx';
 import StaffGate, { StaffChip } from '../components/StaffGate.jsx';
+import PostalOrders from '../components/PostalOrders.jsx';
 import { isElectron, electronConfig, desktop } from '../electron.js';
 import { describeSelection, hasOptions, lineKey, unitPrice } from '../options.js';
 
@@ -28,6 +29,7 @@ export default function TillScreen() {
   // basket line: {key, id, name, price (unit incl. options), qty, stock_qty, track_stock, option_ids, options}
   const [basket, setBasket] = useState([]);
   const [picking, setPicking] = useState(null); // product awaiting option choice
+  const [postOpen, setPostOpen] = useState(false); // 📦 postal orders (SIAMSHOP-POST-001)
   const [search, setSearch] = useState('');
   const [payment, setPayment] = useState('cash');
   const [fulfilment, setFulfilment] = useState('takeaway'); // takeaway | dine_in (SIAMSHOP-504)
@@ -231,7 +233,8 @@ export default function TillScreen() {
             Today: <strong>{money(summary.totals.gross)}</strong> · {summary.totals.order_count} sales
           </div>
         )}
-        <Link to="/admin" className="btn secondary" style={{ marginLeft: 12 }}>Admin</Link>
+        <button className="btn secondary" style={{ marginLeft: 12 }} onClick={() => setPostOpen(true)}>📦 Post</button>
+        <Link to="/admin" className="btn secondary" style={{ marginLeft: 8 }}>Admin</Link>
       </div>
 
       {flash && <div className={`till-flash ${flash.type}`}>{flash.text}</div>}
@@ -370,6 +373,8 @@ export default function TillScreen() {
           confirmLabel="Add to sale"
         />
       )}
+
+      {postOpen && <PostalOrders onClose={() => setPostOpen(false)} />}
 
       {/* Receipt modal */}
       {receipt && (

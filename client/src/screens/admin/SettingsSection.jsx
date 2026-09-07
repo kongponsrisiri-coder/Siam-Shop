@@ -12,6 +12,7 @@ const FIELDS = [
   { key: 'currency', label: 'Currency (e.g. GBP)', type: 'text' },
   { key: 'shop_email', label: 'Shop notification email (new orders)', type: 'email' },
   { key: 'bank_details', label: 'Bank details (emailed to bank-transfer customers)', type: 'textarea' },
+  { key: 'return_address', label: 'Return address (printed on parcel labels)', type: 'textarea' },
 ];
 
 // Opening hours (SIAMSHOP-503) + Click & Collect (SIAMSHOP-504) — stored as

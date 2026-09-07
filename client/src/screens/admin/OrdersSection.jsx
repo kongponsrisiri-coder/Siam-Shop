@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { api } from '../../api.js';
 import { maskName, maskEmail, maskAddress } from '../../demo.js';
 import { isElectron } from '../../electron.js';
+import PrintLabelButton from '../../components/PrintLabelButton.jsx';
 
 // Clear, combined payment + fulfilment state for the list.
 function orderState(o) {
@@ -232,6 +233,10 @@ function OrderDetail({ id, onBack, onChanged }) {
             </>
           ) : order.channel !== 'instore' && (
             <>
+              <div style={{ flex: '1 1 100%' }}>
+                <PrintLabelButton order={order} onPrinted={() => { load(); onChanged && onChanged(); }} />
+                {order.label_printed_at && <span className="muted" style={{ fontSize: 12, marginLeft: 8 }}>printed {new Date(order.label_printed_at).toLocaleString()}</span>}
+              </div>
               <div style={{ flex: '1 1 160px' }}>
                 <label>Carrier</label>
                 <select value={carrier} onChange={(e) => setCarrier(e.target.value)}>
@@ -403,6 +408,7 @@ export default function OrdersSection() {
                     </td>
                     <td>
                       {o.source || o.channel || '—'}
+                      {o.label_printed_at && <div className="muted" style={{ fontSize: 12 }}>🏷 label ✓</div>}
                       {o.fulfilment && o.fulfilment !== 'delivery' && (
                         <div className="muted" style={{ fontSize: 12 }}>
                           {FULFIL_LABEL[o.fulfilment] || o.fulfilment}{o.pickup_at ? ` · ${pickupText(o)}` : ''}
@@ -416,6 +422,7 @@ export default function OrdersSection() {
                     <td onClick={(e) => e.stopPropagation()}>
                       <div className="order-actions">
                         {canMarkPaid && <button className="btn mini" onClick={(e) => quickPaid(e, o)}>Mark paid</button>}
+                        {canDispatch && <PrintLabelButton order={o} compact onPrinted={load} />}
                         {canDispatch && <button className="btn mini" onClick={(e) => quickDispatch(e, o)}>Dispatch</button>}
                         {canReady && <button className="btn mini" onClick={(e) => quickReady(e, o)}>Ready</button>}
                         {canCollected && <button className="btn mini" onClick={(e) => quickCollected(e, o)}>Collected</button>}

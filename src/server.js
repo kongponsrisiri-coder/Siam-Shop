@@ -128,7 +128,7 @@ const ROLE_ALLOW = {
     ['GET', /^\/api\/admin\/me$/], ['GET', /^\/api\/admin\/products$/], ['GET', /^\/api\/admin\/orders(\/|$)/],
     ['*', /^\/api\/sales(\/|$)/], ['*', /^\/api\/prep(\/|$)/], ['GET', /^\/api\/products\/lookup$/],
     ['*', /^\/api\/stock\/(receive|stocktake|goods-in-batch|scan-invoice|movements)$/], ['GET', /^\/api\/staff\/me$/],
-    ['POST', /^\/api\/admin\/orders\/\d+\/(ready|collected)$/],
+    ['POST', /^\/api\/admin\/orders\/\d+\/(ready|collected|dispatch|label-printed)$/],
   ],
   prep: [
     ['GET', /^\/api\/admin\/me$/], ['*', /^\/api\/prep(\/|$)/], ['GET', /^\/api\/staff\/me$/],
@@ -2142,7 +2142,7 @@ app.get('/api/admin/orders', requireAuth, async (req, res) => {
       `SELECT o.id, o.channel, o.source, o.status, o.payment_status, o.payment_method,
               o.subtotal, o.delivery_fee, o.total, o.created_at, o.fulfilled_at,
               o.dispatch_date, o.tracking_number,
-              o.fulfilment, o.pickup_at, o.ready_at, o.prep_status,
+              o.fulfilment, o.pickup_at, o.ready_at, o.prep_status, o.label_printed_at,
               c.name AS customer_name, c.email AS customer_email
        FROM orders o
        LEFT JOIN customers c ON c.id = o.customer_id
@@ -2218,6 +2218,70 @@ app.get('/api/admin/orders/:id', requireAuth, async (req, res) => {
   } catch (err) {
     console.error('[admin/orders/:id]', err.message);
     res.status(500).json({ error: 'Failed to load order' });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Parcel labels (SIAMSHOP-POST-001) — data for the 4×6 address + packing label
+// printed from the desktop till through the OS driver. Cashier + manager.
+// ---------------------------------------------------------------------------
+const UK_POSTCODE_RE = /\b([A-Z]{1,2}\d[A-Z\d]?\s*\d[A-Z]{2})\b/i;
+function splitPostcode(address) {
+  const text = String(address || '').trim();
+  const m = UK_POSTCODE_RE.exec(text.toUpperCase());
+  if (!m) return { lines: text.split(/\r?\n|,\s*/).map((l) => l.trim()).filter(Boolean), postcode: '' };
+  const pc = m[1].replace(/\s+/, ' ').replace(/^(.+?)(\d[A-Z]{2})$/, '$1 $2').replace(/\s{2,}/g, ' ');
+  const without = text.replace(new RegExp(m[1].replace(/\s+/g, '\\s*'), 'i'), '').replace(/[,\s]+$/, '');
+  return { lines: without.split(/\r?\n|,\s*/).map((l) => l.trim()).filter(Boolean), postcode: pc };
+}
+app.get('/api/admin/orders/:id/label', requireAuth, async (req, res) => {
+  try {
+    const shopId = await resolveShopId(req);
+    if (!shopId) return res.status(404).json({ error: 'Shop not found' });
+    const { rows } = await pool.query(
+      `SELECT o.*, c.name AS customer_name, c.email AS customer_email, c.phone AS customer_phone, s.name AS shop_name
+       FROM orders o LEFT JOIN customers c ON c.id = o.customer_id JOIN shops s ON s.id = o.shop_id
+       WHERE o.id = $1 AND o.shop_id = $2`,
+      [req.params.id, shopId]
+    );
+    const o = rows[0];
+    if (!o) return res.status(404).json({ error: 'Order not found' });
+    if (o.fulfilment !== 'delivery') return res.status(400).json({ error: 'Labels are for postal (delivery) orders only' });
+    if (o.status === 'cancelled' || o.payment_status === 'refunded') return res.status(400).json({ error: 'This order is cancelled/refunded' });
+    const { rows: items } = await pool.query(
+      `SELECT name_snapshot, qty, options_snapshot FROM order_items WHERE order_id = $1 ORDER BY id`, [o.id]
+    );
+    const settings = await getSettings(shopId);
+    const { lines, postcode } = splitPostcode(o.delivery_address);
+    res.json({
+      order_id: o.id,
+      created_at: o.created_at,
+      ship_to: { name: o.customer_name || '', lines, postcode, phone: o.customer_phone || '' },
+      items: items.map((it) => ({ name: it.name_snapshot, qty: it.qty, options: (it.options_snapshot || []).map((x) => x.name) })),
+      staff: req.auth?.name || 'Owner',
+      tracking_url: orderStatusUrl(originFromReq(req), o.id, o.customer_email),
+      shop: { name: o.shop_name, return_address: settings.return_address || '' },
+      label_printed_at: o.label_printed_at,
+      notes: o.notes || '',
+    });
+  } catch (err) {
+    console.error('[admin/orders label]', err.message);
+    res.status(500).json({ error: 'Failed to build label' });
+  }
+});
+app.post('/api/admin/orders/:id/label-printed', requireAuth, async (req, res) => {
+  try {
+    const shopId = await resolveShopId(req);
+    if (!shopId) return res.status(404).json({ error: 'Shop not found' });
+    const { rows } = await pool.query(
+      `UPDATE orders SET label_printed_at = NOW() WHERE id = $1 AND shop_id = $2 RETURNING id, label_printed_at`,
+      [req.params.id, shopId]
+    );
+    if (!rows[0]) return res.status(404).json({ error: 'Order not found' });
+    res.json(rows[0]);
+  } catch (err) {
+    console.error('[admin/orders label-printed]', err.message);
+    res.status(500).json({ error: 'Failed to record label print' });
   }
 });
 

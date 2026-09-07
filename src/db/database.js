@@ -281,6 +281,9 @@ async function initDB() {
     await pool.query(`ALTER TABLE staff ADD COLUMN IF NOT EXISTS pin_lookup TEXT`);
     await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_staff_pin_lookup ON staff(shop_id, pin_lookup) WHERE pin_lookup IS NOT NULL`);
 
+    // SIAMSHOP-POST-001 — parcel label printed (postal orders).
+    await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS label_printed_at TIMESTAMPTZ`);
+
     // Helpful indexes for the hot paths.
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_products_shop ON products(shop_id, is_active)`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_orders_shop ON orders(shop_id, created_at DESC)`);
