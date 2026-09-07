@@ -10,7 +10,7 @@ globalThis.document = { documentElement: { style: {
 globalThis.window = { dispatchEvent: () => {}, addEventListener: () => {}, removeEventListener: () => {} };
 globalThis.CustomEvent = class { constructor(n, o) { this.type = n; this.detail = o && o.detail; } };
 
-const { applyBrandTheme, readableInk, luminance, rgba, DEFAULT_PRIMARY } = await import('../client/src/theme.js');
+const { applyBrandTheme, readableInk, luminance, rgba, textOn, contrastRatio, DEFAULT_PRIMARY } = await import('../client/src/theme.js');
 
 let pass = 0, fail = 0;
 const check = (n, c, e) => { if (c) { pass++; console.log('  ✅', n); } else { fail++; console.log('  ❌', n, e !== undefined ? JSON.stringify(e) : ''); } };
@@ -49,6 +49,31 @@ console.log('— a broken colour cannot blank the UI');
 props.clear();
 applyBrandTheme({ brand_primary: 'not-a-colour', brand_accent: '#E9C09F' });
 check('junk primary falls back and sets no action override', props.get('--brand-primary') === DEFAULT_PRIMARY && !props.has('--brand-action'), props.get('--brand-primary'));
+
+console.log('— a LIGHT brand must still be readable');
+// Korakot's demo shop is #fbf8f1 on #E7A3B0: the header went cream, the white
+// nav links vanished into it, and headings and prices — brand-coloured on white
+// cards — vanished the other way (7 Sep).
+check('contrast ratio: black on white is 21, a colour on itself is 1',
+  Math.round(contrastRatio('#000000', '#ffffff')) === 21 && Math.round(contrastRatio('#abcdef', '#abcdef')) === 1);
+check('a pale brand steps aside as text on white', textOn('#ffffff', '#fbf8f1') === '#1f2328');
+check('a dark brand is kept as text on white', textOn('#ffffff', '#0D1B3E') === '#0D1B3E');
+
+props.clear();
+applyBrandTheme({ brand_primary: '#fbf8f1', brand_accent: '#E7A3B0' });
+check('header text turns dark over a cream header', props.get('--brand-on-primary') === '#1f2328', props.get('--brand-on-primary'));
+check('headings and prices stop being cream on white', props.get('--brand-text') === '#1f2328', props.get('--brand-text'));
+check('a pale accent on a pale header steps aside too',
+  props.get('--brand-accent-on-primary') === '#1f2328', props.get('--brand-accent-on-primary'));
+check('buttons still take the brand, with dark ink on it',
+  props.get('--brand-action') === '#fbf8f1' && props.get('--brand-action-ink') === '#1f2328');
+
+props.clear();
+applyBrandTheme({ brand_primary: '#131313', brand_accent: '#E9C09F' });
+check('a dark header keeps white text and its own accent',
+  props.get('--brand-on-primary') === '#ffffff' && props.get('--brand-accent-on-primary') === '#E9C09F',
+  { ink: props.get('--brand-on-primary'), accent: props.get('--brand-accent-on-primary') });
+check('a dark brand is still used for headings', props.get('--brand-text') === '#131313');
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
