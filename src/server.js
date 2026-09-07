@@ -1132,8 +1132,19 @@ app.get('/api/categories', async (req, res) => {
   try {
     const shopId = await resolveShopId(req);
     if (!shopId) return res.status(404).json({ error: 'Shop not found' });
+    // product_count so the storefront and the till can drop categories with
+    // nothing in them. A shop that has been through an import is left with the
+    // seed's categories sitting empty beside the real ones, and tapping one
+    // just says "No products found" (Korakot, 8 Sep). Admin still lists every
+    // category, because an empty one is exactly what you need to see to fix it.
     const { rows } = await pool.query(
-      `SELECT id, name, name_th, sort_order, availability FROM categories WHERE shop_id = $1 ORDER BY sort_order, name`,
+      `SELECT c.id, c.name, c.name_th, c.sort_order, c.availability,
+              COUNT(p.id)::int AS product_count
+         FROM categories c
+         LEFT JOIN products p ON p.category_id = c.id AND p.is_active = TRUE
+        WHERE c.shop_id = $1
+        GROUP BY c.id
+        ORDER BY c.sort_order, c.name`,
       [shopId]
     );
     const ctx = await shopContext(shopId);

@@ -372,7 +372,7 @@ export default function TillScreen() {
           {categories.length > 0 && (
             <div className="till-cats">
               <button className={`till-cat ${categoryId === '' ? 'active' : ''}`} onClick={() => setCategoryId('')}>All</button>
-              {categories.map((c) => (
+              {categories.filter((c) => c.product_count !== 0).map((c) => (
                 <button
                   key={c.id}
                   className={`till-cat ${String(categoryId) === String(c.id) ? 'active' : ''}`}
