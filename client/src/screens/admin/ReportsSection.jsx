@@ -155,6 +155,31 @@ export default function ReportsSection() {
             </div>
           </div>
 
+          {data.discounts && (
+            <div className="dash-cols">
+              <div className="panel">
+                <h3 style={{ marginTop: 0 }}>Discounts by reason <span className="muted" style={{ fontSize: 13 }}>· total {money(data.discounts.total)}</span></h3>
+                {data.discounts.by_reason.length === 0 ? <p className="muted">No discounts in range.</p> : (
+                  <table><tbody>
+                    {data.discounts.by_reason.map((r) => (
+                      <tr key={r.reason}><td>{r.reason}</td><td>{r.count}</td><td style={{ textAlign: 'right' }}>−{money(r.amount)}</td></tr>
+                    ))}
+                  </tbody></table>
+                )}
+              </div>
+              <div className="panel">
+                <h3 style={{ marginTop: 0 }}>Discounts by staff</h3>
+                {data.discounts.by_staff.length === 0 ? <p className="muted">—</p> : (
+                  <table><tbody>
+                    {data.discounts.by_staff.map((r) => (
+                      <tr key={r.staff}><td>{r.staff}</td><td>{r.count} sales</td><td style={{ textAlign: 'right' }}>−{money(r.amount)}</td></tr>
+                    ))}
+                  </tbody></table>
+                )}
+              </div>
+            </div>
+          )}
+
           <div className="panel">
             <h3 style={{ marginTop: 0 }}>Top products in range</h3>
             {data.top_products.length === 0 ? <p className="muted">No sales in range.</p> : (

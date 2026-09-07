@@ -6,6 +6,8 @@ import OptionPicker from '../components/OptionPicker.jsx';
 import StaffGate, { StaffChip } from '../components/StaffGate.jsx';
 import PostalOrders from '../components/PostalOrders.jsx';
 import { OpenTillModal, CloseTillModal } from '../components/TillSession.jsx';
+import DiscountModal from '../components/DiscountModal.jsx';
+import ManagerPin from '../components/ManagerPin.jsx';
 import { isElectron, electronConfig, desktop } from '../electron.js';
 import { describeSelection, hasOptions, lineKey, unitPrice } from '../options.js';
 
@@ -89,11 +91,20 @@ export default function TillScreen() {
     }
   }, [authed]);
 
-  const subtotal = useMemo(() => basket.reduce((s, i) => s + Number(i.price) * i.qty, 0), [basket]);
+  const lineGross = (i) => Number(i.price) * i.qty;
+  const lineDisc = (i) => (!i.discount ? 0 : i.discount.type === 'percent' ? lineGross(i) * Math.min(100, i.discount.value) / 100 : Math.min(i.discount.value, lineGross(i)));
+  const lineNet = (i) => lineGross(i) - lineDisc(i);
+  const linesNet = useMemo(() => basket.reduce((s, i) => s + lineNet(i), 0), [basket]);
+  const basketDiscAmount = useMemo(() => (!basketDiscount ? 0 : basketDiscount.type === 'percent' ? linesNet * Math.min(100, basketDiscount.value) / 100 : Math.min(basketDiscount.value, linesNet)), [basketDiscount, linesNet]);
+  const subtotal = useMemo(() => +(linesNet - basketDiscAmount).toFixed(2), [linesNet, basketDiscAmount]);
+  const totalDiscount = useMemo(() => +(basket.reduce((s, i) => s + lineDisc(i), 0) + basketDiscAmount).toFixed(2), [basket, basketDiscAmount]);
   const change = useMemo(() => {
     const t = Number(tendered);
     return payment === 'cash' && t >= subtotal ? t - subtotal : 0;
   }, [tendered, subtotal, payment]);
+  function setLineDiscount(key, d) {
+    setBasket((prev) => prev.map((i) => (i.key === key ? { ...i, discount: d } : i)));
+  }
 
   function showFlash(type, text) {
     setFlash({ type, text });
@@ -180,7 +191,7 @@ export default function TillScreen() {
     });
   }, [catalogue, search, categoryId]);
 
-  async function completeSale() {
+  async function completeSale(approvalToken) {
     if (basket.length === 0) return;
     if (payment === 'cash' && tendered !== '' && Number(tendered) < subtotal) {
       return showFlash('err', 'Cash tendered is less than the total');
@@ -188,7 +199,9 @@ export default function TillScreen() {
     setBusy(true);
     try {
       const sale = await api.createSale({
-        items: basket.map((i) => ({ product_id: i.id, qty: i.qty, option_ids: i.option_ids })),
+        items: basket.map((i) => ({ product_id: i.id, qty: i.qty, option_ids: i.option_ids, discount: i.discount ? { type: i.discount.type, value: i.discount.value, reason: i.discount.reason } : undefined })),
+        discount: basketDiscount ? { type: basketDiscount.type, value: basketDiscount.value, reason: basketDiscount.reason } : undefined,
+        approval_token: approvalToken,
         payment_method: payment,
         fulfilment,
         amount_tendered: payment === 'cash' && tendered !== '' ? Number(tendered) : undefined,
@@ -196,6 +209,7 @@ export default function TillScreen() {
       setReceipt(sale);
       setLastSale(sale);
       setBasket([]);
+      setBasketDiscount(null);
       setTendered('');
       setFulfilment('takeaway');
       setSearch('');
@@ -208,7 +222,9 @@ export default function TillScreen() {
       await Promise.all([loadCatalogue(), loadSummary(), loadTill()]);
       scanRef.current?.focus();
     } catch (err) {
-      showFlash('err', err.message);
+      // Over the discount threshold → a manager taps their PIN, then we retry with the one-off token.
+      if (err.status === 403 && /approval/i.test(err.message)) setApproval({ message: err.message });
+      else showFlash('err', err.message);
     } finally {
       setBusy(false);
     }
@@ -216,6 +232,10 @@ export default function TillScreen() {
 
   const [printMsg, setPrintMsg] = useState('');
   const [lastSale, setLastSale] = useState(null); // SIAMSHOP-RECEIPT-001: reprint last receipt
+  // Discounts (SIAMSHOP-DISCOUNT-001): per line (basket[i].discount) + basket-level.
+  const [basketDiscount, setBasketDiscount] = useState(null); // { type, value, reason, amount }
+  const [discountModal, setDiscountModal] = useState(null); // { key } | 'basket' | null
+  const [approval, setApproval] = useState(null); // pending sale awaiting manager approval
   const [shopSettings, setShopSettings] = useState(null);
   useEffect(() => { if (authed) api.getSettings().then(setShopSettings).catch(() => {}); }, [authed]);
   async function printReceipt(sale, { copies } = {}) {
@@ -232,10 +252,12 @@ export default function TillScreen() {
       createdAt: sale.created_at,
       fulfilment: sale.fulfilment || fulfilment,
       items: (sale.items || []).map((it) => ({
-        name: it.name, qty: it.qty, line_total: it.line_total,
-        unit_price: it.qty ? Number(it.line_total) / it.qty : it.line_total,
+        name: it.name, qty: it.qty, line_total: it.line_total, gross: it.gross ?? it.line_total,
+        unit_price: it.qty ? Number(it.gross ?? it.line_total) / it.qty : it.line_total,
         options: (it.options || []).map((o) => o.name),
+        discount: it.discount || null,
       })),
+      discount: sale.discount || null, discount_amount: sale.discount_amount || 0,
       subtotal: sale.subtotal, total: sale.total,
       payment_method: sale.payment_method, amount_tendered: sale.amount_tendered, change_given: sale.change_given,
     });
@@ -334,25 +356,34 @@ export default function TillScreen() {
             <div className="till-lines">
               {basket.map((i) => (
                 <div className="till-line" key={i.key}>
-                  <div style={{ flex: 1 }}>
+                  <div style={{ flex: 1, cursor: 'pointer' }} onClick={() => setDiscountModal({ key: i.key })} title="Tap for a line discount">
                     <div>{i.name}</div>
                     {i.options.length > 0 && (
                       <div className="line-opts">{i.options.map((o) => o.name).join(', ')}</div>
                     )}
                     <div className="muted" style={{ fontSize: 12 }}>{money(i.price)} each</div>
+                    {i.discount && <div className="line-opts" style={{ color: '#b45309' }}>−{money(lineDisc(i))} · {i.discount.reason}</div>}
                   </div>
                   <div className="till-qty">
                     <button onClick={() => setQty(i.key, i.qty - 1)}>−</button>
                     <span>{i.qty}</span>
                     <button onClick={() => setQty(i.key, i.qty + 1)}>+</button>
                   </div>
-                  <div style={{ width: 64, textAlign: 'right' }}>{money(i.price * i.qty)}</div>
+                  <div style={{ width: 64, textAlign: 'right' }}>{money(lineNet(i))}</div>
                   <button className="till-x" onClick={() => removeLine(i.key)}>×</button>
                 </div>
               ))}
             </div>
           )}
 
+          {basket.length > 0 && (
+            <div className="row" style={{ justifyContent: 'space-between', fontSize: 13, marginTop: 6 }}>
+              <button className="btn mini secondary" onClick={() => setDiscountModal('basket')}>
+                {basketDiscount ? `Basket discount: −${money(basketDiscAmount)} · ${basketDiscount.reason}` : '% Basket discount'}
+              </button>
+              {totalDiscount > 0 && <span className="muted">Discounts −{money(totalDiscount)}</span>}
+            </div>
+          )}
           <div className="till-total">
             <span>Total</span>
             <span>{money(subtotal)}</span>
@@ -390,7 +421,7 @@ export default function TillScreen() {
           <button
             className="btn till-complete"
             disabled={basket.length === 0 || busy}
-            onClick={completeSale}
+            onClick={() => completeSale()}
           >
             {busy ? 'Saving…' : `Complete sale · ${money(subtotal)}`}
           </button>
@@ -408,6 +439,18 @@ export default function TillScreen() {
       )}
 
       {postOpen && <PostalOrders onClose={() => setPostOpen(false)} />}
+      {discountModal === 'basket' && (
+        <DiscountModal title="Basket discount" base={linesNet} reasons={shopSettings?.discount_reasons || ['Damaged', 'Near date', 'Staff', 'Manager goodwill', 'Price match']} initial={basketDiscount}
+          onApply={(d) => { setBasketDiscount(d); setDiscountModal(null); }} onRemove={() => { setBasketDiscount(null); setDiscountModal(null); }} onClose={() => setDiscountModal(null)} />
+      )}
+      {discountModal && discountModal.key && (() => { const line = basket.find((i) => i.key === discountModal.key); return line ? (
+        <DiscountModal title={`Discount — ${line.name}`} base={lineGross(line)} reasons={shopSettings?.discount_reasons || ['Damaged', 'Near date', 'Staff', 'Manager goodwill', 'Price match']} initial={line.discount}
+          onApply={(d) => { setLineDiscount(line.key, d); setDiscountModal(null); }} onRemove={() => { setLineDiscount(line.key, null); setDiscountModal(null); }} onClose={() => setDiscountModal(null)} />
+      ) : null; })()}
+      {approval && (
+        <ManagerPin title="Manager approval for this discount" reason={approval.message} onClose={() => setApproval(null)}
+          onApproved={({ token }) => { setApproval(null); completeSale(token); }} />
+      )}
       {tillModal === 'open' && <OpenTillModal onOpened={(t) => { setTill(t); setTillModal(null); showFlash('ok', 'Till open'); }} onClose={() => setTillModal('dismissed')} />}
       {tillModal === 'float' && <OpenTillModal mode="float" onOpened={(t) => { setTill(t); setTillModal(null); showFlash('ok', 'Float saved'); }} onClose={() => setTillModal('dismissed')} />}
       {tillModal === 'close' && till?.session && (
@@ -424,10 +467,13 @@ export default function TillScreen() {
                 <span>
                   {it.name} × {it.qty}
                   {it.options?.length > 0 && <div className="line-opts">{it.options.map((o) => o.name).join(', ')}</div>}
+                  {it.discount && <div className="line-opts" style={{ color: '#b45309' }}>Discount − {money(it.discount.amount)} · {it.discount.reason}</div>}
                 </span>
                 <span>{money(it.line_total)}</span>
               </div>
             ))}
+            {receipt.discount && <div className="row" style={{ justifyContent: 'space-between', color: '#b45309' }}><span>Basket discount · {receipt.discount.reason}</span><span>−{money(receipt.discount.amount)}</span></div>}
+            {receipt.discount_approved_by && <div className="muted" style={{ fontSize: 12 }}>Approved by {receipt.discount_approved_by}</div>}
             <hr />
             <div className="row" style={{ justifyContent: 'space-between', fontWeight: 800 }}>
               <span>Total</span><span>{money(receipt.total)}</span>

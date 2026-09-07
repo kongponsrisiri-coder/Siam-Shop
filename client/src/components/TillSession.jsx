@@ -99,10 +99,10 @@ export function CloseTillModal({ summary, onClosed, onClose }) {
   const isManager = me && (me.role === 'manager' || me.role === 'admin');
   const variance = counted === '' ? null : Number(counted) - Number(summary?.expected_cash || 0);
 
-  async function doClose(token) {
+  async function doClose(approvalToken) {
     setBusy(true); setError('');
     try {
-      const r = await api.tillClose(Number(counted), notes, token);
+      const r = await api.tillClose(Number(counted), notes, approvalToken);
       setResult(r.summary);
       if (isElectron && electronConfig.printer?.autoPrint !== false) desktop.printZ(r.summary, electronConfig.shopName).catch(() => {});
     } catch (e) {
