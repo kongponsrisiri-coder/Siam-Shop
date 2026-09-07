@@ -11,6 +11,7 @@ export default function CartScreen() {
   const t = useT();
   const { lang } = useLang();
   const [minOrder, setMinOrder] = useState(0);
+  const [collectionEnabled, setCollectionEnabled] = useState(false);
   const [params, setParams] = useSearchParams();
   // Messenger pre-fill: items that need a size/topping choice can't be added
   // blind — list them with a link to the product page instead.
@@ -20,7 +21,11 @@ export default function CartScreen() {
     let live = true;
     api
       .getSettings()
-      .then((s) => live && setMinOrder(Number(s?.minimum_order_amount) || 0))
+      .then((s) => {
+        if (!live) return;
+        setMinOrder(Number(s?.minimum_order_amount) || 0);
+        setCollectionEnabled(!!s?.collection_enabled);
+      })
       .catch(() => {});
     return () => {
       live = false;
@@ -82,8 +87,12 @@ export default function CartScreen() {
     );
   }
 
+  // The minimum is a delivery rule. When the shop also does collection the
+  // basket must still reach checkout, where picking collection clears it —
+  // otherwise a £9 lunch box can never be ordered at all.
   const belowMin = minOrder > 0 && subtotal < minOrder;
   const shortfall = belowMin ? minOrder - subtotal : 0;
+  const blocked = belowMin && !collectionEnabled;
 
   return (
     <div className="container">
@@ -137,8 +146,10 @@ export default function CartScreen() {
 
         {belowMin && (
           <div className="min-warn">
-            {t('minOrder')}: <strong>£{minOrder.toFixed(2)}</strong> — {t('addMore')}{' '}
-            <strong>£{shortfall.toFixed(2)}</strong> {t('moreToCheckout')}.
+            {collectionEnabled ? t('minOrderDelivery') : t('minOrder')}:{' '}
+            <strong>£{minOrder.toFixed(2)}</strong> — {t('addMore')}{' '}
+            <strong>£{shortfall.toFixed(2)}</strong> {t('moreToCheckout')}
+            {collectionEnabled ? `, ${t('orCollect')}` : ''}.
           </div>
         )}
 
@@ -147,7 +158,7 @@ export default function CartScreen() {
           <div className="spacer" />
           <button
             className="btn"
-            disabled={belowMin}
+            disabled={blocked}
             onClick={() => navigate('/checkout')}
           >
             {t('checkout')} →

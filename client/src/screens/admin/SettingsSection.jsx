@@ -6,7 +6,7 @@ import BrandCard from '../../components/BrandCard.jsx';
 // Editable fields driven by adminGetSettings / adminUpdateSettings. Values are
 // returned/saved as strings (backend contract).
 const FIELDS = [
-  { key: 'minimum_order_amount', label: 'Minimum order amount (£)', type: 'number', step: '0.01' },
+  { key: 'minimum_order_amount', label: 'Minimum order for delivery (£)', type: 'number', step: '0.01', hint: 'Applies to delivery only — collection orders have no minimum.' },
   { key: 'delivery_fee_london', label: 'Delivery fee — London (£)', type: 'number', step: '0.01' },
   { key: 'delivery_fee_mainland', label: 'Delivery fee — UK mainland (£)', type: 'number', step: '0.01' },
   { key: 'delivery_fee_remote', label: 'Delivery fee — remote (£)', type: 'number', step: '0.01' },
@@ -178,6 +178,7 @@ export default function SettingsSection() {
                     onChange={(e) => set(f.key, e.target.value)}
                   />
                 )}
+                {f.hint ? <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>{f.hint}</div> : null}
               </div>
             ))}
             <div style={{ flex: '1 1 220px' }}>

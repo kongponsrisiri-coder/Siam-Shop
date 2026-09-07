@@ -492,9 +492,12 @@ async function createPendingOrder(client, shopId, body, { paymentMethod, source 
     lines.push({ product: p, qty, lineTotal, snapshot, optionsTotal });
   }
 
+  // The minimum exists to make a delivery run worth the driver's time, so it
+  // applies to delivery only. Click & collect has no floor — someone walking in
+  // for a single £9 lunch box must be able to order it (Korakot, 7 Sep).
   const minOrder = Number(settings.minimum_order_amount || 0);
-  if (subtotal < minOrder) {
-    throw httpError(400, `Minimum order is £${minOrder.toFixed(2)} (your items total £${subtotal.toFixed(2)})`);
+  if (fulfilment === 'delivery' && subtotal < minOrder) {
+    throw httpError(400, `Minimum order for delivery is £${minOrder.toFixed(2)} (your items total £${subtotal.toFixed(2)})`);
   }
 
   const deliveryFee = quote ? quote.fee : 0;
@@ -646,8 +649,8 @@ async function handleMessengerOrder(shopId, senderId, text, baseUrl) {
     summary + '\n' + (th ? `รวม: £${subtotal.toFixed(2)}` : `Subtotal: £${subtotal.toFixed(2)}`);
   if (subtotal < minOrder) {
     reply += '\n' + (th
-      ? `(ยอดสั่งซื้อขั้นต่ำ £${minOrder.toFixed(2)} — กรุณาเพิ่มสินค้าค่ะ)`
-      : `(Minimum order is £${minOrder.toFixed(2)} — please add a little more.)`);
+      ? `(ยอดสั่งซื้อขั้นต่ำสำหรับจัดส่ง £${minOrder.toFixed(2)} — เพิ่มสินค้าอีกนิด หรือเลือกมารับเองได้ค่ะ)`
+      : `(Minimum for delivery is £${minOrder.toFixed(2)} — add a little more, or choose collection.)`);
   }
   if (parsed.unmatched.length) {
     reply += '\n' + (th ? 'ไม่พบ: ' : "Couldn't find: ") + parsed.unmatched.join(', ');
