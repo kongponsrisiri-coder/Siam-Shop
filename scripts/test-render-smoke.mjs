@@ -61,7 +61,8 @@ const ROUTES = [
   { hash: '#/', authed: false, expect: /Enter your PIN|Till sign in/ },
   { hash: '#/till', authed: false, expect: /Enter your PIN/ },
   { hash: '#/shop', authed: false },
-  { hash: '#/till', authed: true, expect: /Scan barcode|till-scan/, forbid: /Enter your PIN/ },
+  // cashpad-keys: the cash tender pad must draw on the till, not just compile.
+  { hash: '#/till', authed: true, expect: /(Scan barcode|till-scan)[\s\S]*cashpad-keys/, forbid: /Enter your PIN/ },
   { hash: '#/prep', authed: true, forbid: /Enter your PIN/ },
   { hash: '#/scan', authed: true },
   ...['dashboard', 'reports', 'products', 'categories', 'orders', 'customers', 'campaigns', 'staff', 'settings', 'device'].map((t) => ({ hash: `#/admin?tab=${t}`, authed: true, forbid: /Enter your PIN|Manager or owner only/ })),

@@ -582,3 +582,21 @@ th { color: var(--muted); font-weight: 600; }
 .till-customer-list button { display: block; width: 100%; text-align: left; padding: 8px 12px; border: none; background: none; cursor: pointer; font: inherit; }
 .till-customer-list button:hover { background: #fff8e1; }
 .till-customer-chip { display: inline-flex; align-items: center; gap: 8px; background: #eef0f5; border-radius: 999px; padding: 4px 10px; font-size: 13px; }
+
+/* Cash tender pad (till). Sized for fingers on a touchscreen, not a mouse. */
+.cashpad { margin-top: 10px; }
+.cashpad-quick { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; margin-bottom: 8px; }
+.cashpad-quick button { padding: 12px 6px; font-size: 14px; }
+.cashpad-keys { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.cashpad-key {
+  padding: 16px 0; font-size: 20px; font-weight: 700; cursor: pointer;
+  background: #fff; color: var(--ink, #111); border: 1px solid var(--line, #d6d6d6); border-radius: 8px;
+}
+.cashpad-key:hover { background: #f4f4f5; }
+.cashpad-key:active { background: #e8e8ea; transform: translateY(1px); }
+.cashpad-clear {
+  width: 100%; margin-top: 6px; padding: 10px; font-size: 14px; cursor: pointer;
+  background: #fff; color: #b91c1c; border: 1px solid var(--line, #d6d6d6); border-radius: 8px;
+}
+.cashpad-clear:disabled { color: #9ca3af; cursor: default; }
+.cashpad-short { margin-top: 8px; color: #b91c1c; font-size: 15px; font-weight: 600; }
