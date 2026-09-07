@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { api } from '../../api.js';
 import ReceiptPreview from '../../components/ReceiptPreview.jsx';
 import BrandCard from '../../components/BrandCard.jsx';
+import { receiptLogoOf } from '../../theme.js';
 
 // Editable fields driven by adminGetSettings / adminUpdateSettings. Values are
 // returned/saved as strings (backend contract).
@@ -252,7 +253,7 @@ export default function SettingsSection() {
               header={form.receipt_header}
               footer={form.receipt_footer}
               vatNumber={form.vat_number}
-              logo={form.brand_logo}
+              logo={receiptLogoOf(form)}
               showLogo={form.receipt_show_logo === '1' || form.receipt_show_logo === true || form.receipt_show_logo === 'true'}
               invert={form.brand_logo_invert === '1' || form.brand_logo_invert === true || form.brand_logo_invert === 'true'}
               style={form.receipt_style || 'rendered'}

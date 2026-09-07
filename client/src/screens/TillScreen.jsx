@@ -4,6 +4,7 @@ import { api, auth, staffSession } from '../api.js';
 import { Logo } from '../components/Logo.jsx';
 import CashPad from '../components/CashPad.jsx';
 import { shopName } from '../shopName.js';
+import { receiptLogoOf } from '../theme.js';
 import OptionPicker from '../components/OptionPicker.jsx';
 import StaffGate, { StaffChip } from '../components/StaffGate.jsx';
 import PostalOrders from '../components/PostalOrders.jsx';
@@ -304,7 +305,7 @@ export default function TillScreen() {
       footer: st.receipt_footer || '',
       vatNote: st.vat_number ? `VAT No. ${st.vat_number}` : '',
       copies: copies ?? st.receipt_copies ?? 1,
-      logo: st.brand_logo || '', showLogo: !!st.receipt_show_logo, logoInvert: !!st.brand_logo_invert, // SIAMSHOP-DEVICE-001 D4
+      logo: receiptLogoOf(st), showLogo: !!st.receipt_show_logo, logoInvert: !!st.brand_logo_invert, // SIAMSHOP-DEVICE-001 D4
       style: st.receipt_style || 'rendered', size: st.print_size || 'normal', // SIAMSHOP-PRINT-RENDER-001
       orderId: sale.id,
       staff: sale.staff || staffSession.get()?.name || '',

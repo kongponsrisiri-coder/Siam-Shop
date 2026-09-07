@@ -111,6 +111,16 @@ export function applyBrandTheme(settings) {
   return getBrand();
 }
 
+// The picture that goes on paper. A logo drawn for a dark app header prints as
+// a black slab, so a shop can give the printer its own artwork; empty means
+// "use the app logo" (Korakot, 8 Sep). One rule, so the till, the reprint
+// button, the test page and the preview cannot disagree.
+export function receiptLogoOf(settings) {
+  const s = settings || {};
+  if (isLogoDataUrl(s.receipt_logo)) return s.receipt_logo;
+  return isLogoDataUrl(s.brand_logo) ? s.brand_logo : '';
+}
+
 export function onBrandChange(cb) {
   if (typeof window === 'undefined') return () => {};
   const h = (e) => cb(e.detail || getBrand());

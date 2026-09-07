@@ -11,35 +11,41 @@ export default function BrandCard({ settings, onSaved }) {
   const [primary, setPrimary] = useState(settings?.brand_primary || DEFAULT_PRIMARY);
   const [accent, setAccent] = useState(settings?.brand_accent || DEFAULT_ACCENT);
   const [logo, setLogo] = useState(settings?.brand_logo || '');
+  // Empty means "use the app logo" — the common case. A shop only fills this in
+  // when the app artwork does not survive a thermal printer (Korakot, 8 Sep).
+  const [receiptLogo, setReceiptLogo] = useState(settings?.receipt_logo || '');
   const [showLogo, setShowLogo] = useState(settings?.receipt_show_logo === '1' || settings?.receipt_show_logo === true || settings?.receipt_show_logo === 'true');
   const [invert, setInvert] = useState(settings?.brand_logo_invert === '1' || settings?.brand_logo_invert === true || settings?.brand_logo_invert === 'true');
   const [printPreview, setPrintPreview] = useState(null); // { dataUrl, darkRatio, width, height }
   // Exactly what the receipt printer will produce (same rules as electron/raster.js).
   useEffect(() => {
     let alive = true;
-    if (!logo) { setPrintPreview(null); return undefined; }
-    renderPrintPreview(logo, { invert }).then((r) => { if (alive) setPrintPreview(r); }).catch(() => { if (alive) setPrintPreview(null); });
+    const onPaper = receiptLogo || logo;
+    if (!onPaper) { setPrintPreview(null); return undefined; }
+    renderPrintPreview(onPaper, { invert }).then((r) => { if (alive) setPrintPreview(r); }).catch(() => { if (alive) setPrintPreview(null); });
     return () => { alive = false; };
-  }, [logo, invert]);
+  }, [logo, receiptLogo, invert]);
   const tooDark = printPreview && printPreview.darkRatio > 0.5;
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState('');
 
-  async function onFile(e) {
+  async function readLogo(e, set) {
     const f = e.target.files?.[0];
     if (!f) return;
     setMsg('');
     try {
       const url = await fileToLogoDataUrl(f);
       if (url.length > 400000) throw new Error('Logo is too large even after resizing — try a simpler image');
-      setLogo(url);
+      set(url);
     } catch (err) { setMsg(err.message); }
     e.target.value = '';
   }
+  const onFile = (e) => readLogo(e, setLogo);
+  const onReceiptFile = (e) => readLogo(e, setReceiptLogo);
   async function save(values) {
     setBusy(true); setMsg('');
     try {
-      const body = values || { brand_primary: primary, brand_accent: accent, brand_logo: logo, receipt_show_logo: showLogo ? '1' : '0', brand_logo_invert: invert ? '1' : '0' };
+      const body = values || { brand_primary: primary, brand_accent: accent, brand_logo: logo, receipt_logo: receiptLogo, receipt_show_logo: showLogo ? '1' : '0', brand_logo_invert: invert ? '1' : '0' };
       const saved = await api.adminUpdateSettings(body);
       applyBrandTheme(saved);
       onSaved && onSaved(saved);
@@ -48,9 +54,9 @@ export default function BrandCard({ settings, onSaved }) {
     setBusy(false);
   }
   function reset() {
-    setPrimary(DEFAULT_PRIMARY); setAccent(DEFAULT_ACCENT); setLogo('');
+    setPrimary(DEFAULT_PRIMARY); setAccent(DEFAULT_ACCENT); setLogo(''); setReceiptLogo('');
     setInvert(false);
-    save({ brand_primary: '', brand_accent: '', brand_logo: '', receipt_show_logo: showLogo ? '1' : '0', brand_logo_invert: '0' });
+    save({ brand_primary: '', brand_accent: '', brand_logo: '', receipt_logo: '', receipt_show_logo: showLogo ? '1' : '0', brand_logo_invert: '0' });
   }
   const preview = { primary: isHex(primary) ? primary : DEFAULT_PRIMARY, accent: isHex(accent) ? accent : DEFAULT_ACCENT };
 
@@ -77,9 +83,14 @@ export default function BrandCard({ settings, onSaved }) {
             <input type="checkbox" style={{ width: 'auto' }} checked={showLogo} onChange={(e) => setShowLogo(e.target.checked)} />
             <span>Print the logo at the top of till receipts</span>
           </label>
-          {logo && (
+          {(logo || receiptLogo) && (
             <div style={{ marginTop: 10 }}>
               <label>On the receipt (black and white, as the printer sees it)</label>
+              <p className="muted" style={{ fontSize: 12, margin: '0 0 6px' }}>
+                {receiptLogo
+                  ? 'Using a separate picture for paper.'
+                  : 'Using the logo above. A logo drawn for a dark header often prints as a black block — give the printer its own picture if so.'}
+              </p>
               <div className="print-preview-paper">
                 {printPreview ? <img src={printPreview.dataUrl} alt="Receipt logo preview" style={{ width: Math.round(printPreview.width / 2), height: Math.round(printPreview.height / 2), imageRendering: 'pixelated' }} /> : <span className="muted" style={{ fontSize: 12 }}>Rendering…</span>}
               </div>
@@ -94,6 +105,13 @@ export default function BrandCard({ settings, onSaved }) {
                 <input type="checkbox" style={{ width: 'auto' }} checked={invert} onChange={(e) => setInvert(e.target.checked)} />
                 <span>Invert (for logos drawn light-on-dark)</span>
               </label>
+              <div className="row" style={{ gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
+                <label className="btn secondary" style={{ cursor: 'pointer', margin: 0 }}>
+                  {receiptLogo ? 'Replace receipt logo…' : 'Use a different logo on receipts…'}
+                  <input type="file" accept="image/*" onChange={onReceiptFile} style={{ display: 'none' }} />
+                </label>
+                {receiptLogo && <button type="button" className="btn ghost" onClick={() => setReceiptLogo('')}>Back to the app logo</button>}
+              </div>
             </div>
           )}
         </div>

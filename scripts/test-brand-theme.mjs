@@ -10,7 +10,7 @@ globalThis.document = { documentElement: { style: {
 globalThis.window = { dispatchEvent: () => {}, addEventListener: () => {}, removeEventListener: () => {} };
 globalThis.CustomEvent = class { constructor(n, o) { this.type = n; this.detail = o && o.detail; } };
 
-const { applyBrandTheme, readableInk, luminance, rgba, textOn, contrastRatio, DEFAULT_PRIMARY } = await import('../client/src/theme.js');
+const { applyBrandTheme, readableInk, luminance, rgba, textOn, contrastRatio, receiptLogoOf, DEFAULT_PRIMARY } = await import('../client/src/theme.js');
 
 let pass = 0, fail = 0;
 const check = (n, c, e) => { if (c) { pass++; console.log('  ✅', n); } else { fail++; console.log('  ❌', n, e !== undefined ? JSON.stringify(e) : ''); } };
@@ -88,6 +88,20 @@ props.clear();
 applyBrandTheme({ brand_primary: '#5B1A1A', brand_accent: '#E8D9B5' });
 check('a deep brand is still used as a fill, with white on it',
   props.get('--brand-action') === '#5B1A1A' && props.get('--brand-action-ink') === '#ffffff');
+
+console.log('— the receipt can have its own logo');
+// A logo drawn for a dark app header prints as a black slab, so paper gets its
+// own picture; empty means "use the app logo" (Korakot, 8 Sep).
+const PNG = 'data:image/png;base64,' + 'A'.repeat(64) + '=';
+const PNG2 = 'data:image/png;base64,' + 'B'.repeat(64) + '=';
+check('no receipt logo → the app logo goes on paper', receiptLogoOf({ brand_logo: PNG }) === PNG);
+check('a receipt logo wins', receiptLogoOf({ brand_logo: PNG, receipt_logo: PNG2 }) === PNG2);
+check('an empty receipt logo falls back rather than printing nothing', receiptLogoOf({ brand_logo: PNG, receipt_logo: '' }) === PNG);
+check('junk in either field never reaches the printer',
+  receiptLogoOf({ brand_logo: 'javascript:alert(1)', receipt_logo: 'not-an-image' }) === '');
+check('a junk receipt logo still lets the good app logo print',
+  receiptLogoOf({ brand_logo: PNG, receipt_logo: 'nope' }) === PNG);
+check('no logos at all → nothing', receiptLogoOf({}) === '' && receiptLogoOf(null) === '');
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
