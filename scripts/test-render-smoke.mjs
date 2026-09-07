@@ -9,6 +9,7 @@
 //   node scripts/test-render-smoke.mjs --no-build # smoke the existing dist-electron
 //   CHROME_BIN=/path/to/chrome node scripts/test-render-smoke.mjs
 import { spawnSync, spawn } from 'node:child_process';
+import { cpus } from 'node:os';
 import { createServer } from 'node:http';
 import { readFileSync, existsSync, statSync } from 'node:fs';
 import path from 'node:path';
@@ -139,11 +140,17 @@ async function main() {
   const port = server.address().port;
 
   // Headless Chrome ignores --timeout/--dump-dom while the staff screens keep
-  // timers alive, so each run ends on our own kill (30 s). Run the routes in
-  // PARALLEL (separate profiles) so the whole smoke stays ~30 s.
-  const results = await Promise.all(ROUTES.map(async (route, idx) => {
+  // timers alive, so each run ends on our own kill. Routes run in parallel
+  // (separate profiles), but in BATCHES: launching all sixteen at once starved
+  // a 2-core CI runner and every one was killed before it printed a thing, so
+  // the v0.1.10 release read as sixteen blank screens when the app was fine.
+  // Concurrency and the kill are sized off the machine, and can be overridden.
+  const CONCURRENCY = Number(process.env.SMOKE_CONCURRENCY) || Math.max(2, Math.min(8, cpus().length));
+  const KILL_MS = Number(process.env.SMOKE_KILL_MS) || (process.env.CI ? 60000 : 25000);
+  console.log(`— ${ROUTES.length} routes, ${CONCURRENCY} at a time, ${KILL_MS / 1000}s each`);
+  const runRoute = async (route, idx) => {
     const url = `http://127.0.0.1:${port}/index.html${route.authed ? '?authed=1' : ''}${route.hash}`;
-    const args = ['--headless=new', '--disable-gpu', '--no-sandbox', '--no-first-run', '--enable-logging=stderr', '--v=0',
+    const args = ['--headless=new', '--disable-gpu', '--no-sandbox', '--disable-dev-shm-usage', '--no-first-run', '--enable-logging=stderr', '--v=0',
       '--virtual-time-budget=5000', '--timeout=8000', '--window-size=1280,800', `--user-data-dir=${path.join(root, 'client', '.smoke-profile', String(idx))}`, '--dump-dom', url];
     const out = await new Promise((resolve) => {
       // detached → own process group, so the kill takes Chrome's helpers too
@@ -155,7 +162,7 @@ async function main() {
       const t = setTimeout(() => {
         try { process.platform === 'win32' ? c.kill('SIGKILL') : process.kill(-c.pid, 'SIGKILL'); } catch {}
         setTimeout(finish, 500); // resolve with whatever we captured
-      }, 25000);
+      }, KILL_MS);
       c.on('close', () => { clearTimeout(t); finish(); });
       c.on('error', () => { clearTimeout(t); finish(); });
     });
@@ -165,14 +172,21 @@ async function main() {
     const text = rootHtml.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
     const expectOk = !route.expect || route.expect.test(rootHtml);
     const forbidOk = !route.forbid || !route.forbid.test(text);
-    return { route, uncaught, rootHtml, boundary, expectOk, forbidOk, ok: uncaught.length === 0 && rootHtml.trim().length > 40 && !boundary && expectOk && forbidOk };
-  }));
+    return { route, uncaught, rootHtml, boundary, expectOk, forbidOk, stderrTail: out.se.trim().split('\n').slice(-6).join('\n'),
+             ok: uncaught.length === 0 && rootHtml.trim().length > 40 && !boundary && expectOk && forbidOk };
+  };
+  const results = [];
+  for (let i = 0; i < ROUTES.length; i += CONCURRENCY) {
+    const batch = ROUTES.slice(i, i + CONCURRENCY);
+    results.push(...await Promise.all(batch.map((route, j) => runRoute(route, i + j))));
+  }
   fake.close();
   let fail = 0;
-  for (const { route, uncaught, rootHtml, boundary, expectOk, forbidOk, ok } of results) {
+  for (const { route, uncaught, rootHtml, boundary, expectOk, forbidOk, stderrTail, ok } of results) {
     const label = `${route.hash}${route.authed ? ' (signed in)' : ''}`;
     console.log(`  ${ok ? '✅' : '❌'} ${label.padEnd(30)} root=${rootHtml.trim().length}ch${boundary ? ' ERROR-BOUNDARY' : ''}${uncaught.length ? ` uncaught=${uncaught.length}` : ''}${!expectOk ? ' EXPECTED-TEXT-MISSING' : ''}${!forbidOk ? ' STILL-ON-GATE' : ''}`);
-    if (!ok) { fail++; for (const l of uncaught.slice(0, 5)) console.log('     ', l.trim().slice(0, 300)); if (!rootHtml.trim().length) console.log('      (empty #root — blank window)'); if (boundary || !expectOk || !forbidOk) console.log('      ', rootHtml.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').slice(0, 300)); }
+    if (!ok) { fail++; for (const l of uncaught.slice(0, 5)) console.log('     ', l.trim().slice(0, 300)); if (!rootHtml.trim().length) console.log('      (empty #root — blank window, or Chrome never dumped the DOM)'); if (boundary || !expectOk || !forbidOk) console.log('      ', rootHtml.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').slice(0, 300));
+      if (!rootHtml.trim().length && stderrTail) for (const l of stderrTail.split('\n')) console.log('       chrome:', l.slice(0, 220)); }
   }
   server.close();
   console.log(fail ? `\n❌ ${fail} route(s) failed to render` : `\n✅ all ${ROUTES.length} routes rendered`);
