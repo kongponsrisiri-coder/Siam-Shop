@@ -82,7 +82,12 @@ export function applyBrandTheme(settings) {
     // shop got its own header above pink controls (Korakot, 7 Sep). They now
     // follow the shop's primary, with ink picked for contrast. A shop that has
     // set no brand colour keeps Action Red, because these stay unset.
-    const branded = isHex(s.brand_primary);
+    // A brand can only be a BUTTON FILL if it stands out from the white page.
+    // The demo shop's #fbf8f1 does not: its buttons and its active category
+    // chip came out the same colour as the page behind them, and the language
+    // pill vanished into the header. A brand that pale steps aside entirely and
+    // the product's Action Red stands, which is visible on any header.
+    const branded = isHex(s.brand_primary) && contrastRatio(state.primary, '#ffffff') >= 3;
     if (branded) {
       root.style.setProperty('--brand-action', state.primary);
       root.style.setProperty('--brand-action-ink', readableInk(state.primary));
