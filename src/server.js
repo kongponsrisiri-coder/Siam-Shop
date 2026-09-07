@@ -127,12 +127,12 @@ const ROLE_ALLOW = {
   cashier: [
     ['GET', /^\/api\/admin\/me$/], ['GET', /^\/api\/admin\/products$/], ['GET', /^\/api\/admin\/orders(\/|$)/],
     ['*', /^\/api\/sales(\/|$)/], ['*', /^\/api\/prep(\/|$)/], ['GET', /^\/api\/products\/lookup$/],
-    ['*', /^\/api\/stock\/(receive|stocktake|goods-in-batch|scan-invoice|movements)$/], ['GET', /^\/api\/staff\/me$/],
+    ['*', /^\/api\/stock\/(receive|stocktake|goods-in-batch|scan-invoice|movements)$/], ['GET', /^\/api\/staff\/me$/], ['POST', /^\/api\/staff\/change-pin$/],
     ['*', /^\/api\/till\/(\/|$)/], ['*', /^\/api\/till\/session(\/|$)/], ['POST', /^\/api\/till\/void$/], ['GET', /^\/api\/till\/sessions(\/|$)/],
     ['POST', /^\/api\/admin\/orders\/\d+\/(ready|collected|dispatch|label-printed|refund)$/], ['GET', /^\/api\/admin\/orders\/\d+\/refunds$/],
   ],
   prep: [
-    ['GET', /^\/api\/admin\/me$/], ['*', /^\/api\/prep(\/|$)/], ['GET', /^\/api\/staff\/me$/],
+    ['GET', /^\/api\/admin\/me$/], ['*', /^\/api\/prep(\/|$)/], ['GET', /^\/api\/staff\/me$/], ['POST', /^\/api\/staff\/change-pin$/],
   ],
 };
 function roleAllows(role, method, path) {
@@ -743,6 +743,10 @@ const PIN_RE = /^\d{4,6}$/;
 
 // PIN → token. PINs are unique per shop (enforced on create), so the pad needs
 // no name grid: type the PIN, we find who it is. Rate-limited like admin login.
+// The one PIN every fresh shop accepts (Korakot, 7 Sep 2026). Works ONLY while the
+// shop has no staff at all; signing in with it creates the first manager and the
+// till insists on a new PIN before anything else.
+const FIRST_TIME_PIN = '2526';
 app.post('/api/staff/login', pinLimiter, async (req, res) => {
   try {
     const shopId = await resolveShopId(req);
@@ -750,17 +754,31 @@ app.post('/api/staff/login', pinLimiter, async (req, res) => {
     const pin = String(req.body?.pin || '');
     if (!PIN_RE.test(pin)) return res.status(400).json({ error: 'Enter your 4–6 digit PIN' });
     const { rows } = await pool.query(
-      `SELECT id, name, pin_hash, role FROM staff
+      `SELECT id, name, pin_hash, role, must_change_pin FROM staff
        WHERE shop_id = $1 AND active = TRUE AND (pin_lookup = $2 OR pin_lookup IS NULL)`,
       [shopId, pinLookup(shopId, pin)]
     );
-    const hit = rows.find((s) => verifyPassword(pin, s.pin_hash));
+    let hit = rows.find((s) => verifyPassword(pin, s.pin_hash));
+    if (!hit && pin === FIRST_TIME_PIN) {
+      // Brand-new shop with nobody on the staff list yet: the first-time PIN
+      // creates the first manager, who must pick their own PIN before the till opens.
+      const { rows: any } = await pool.query(`SELECT 1 FROM staff WHERE shop_id = $1 LIMIT 1`, [shopId]);
+      if (!any.length) {
+        const ins = await pool.query(
+          `INSERT INTO staff (shop_id, name, pin_hash, pin_lookup, role, must_change_pin)
+           VALUES ($1,'Manager',$2,$3,'manager',TRUE)
+           ON CONFLICT DO NOTHING RETURNING id, name, pin_hash, role, must_change_pin`,
+          [shopId, hashPassword(pin), pinLookup(shopId, pin)]
+        );
+        hit = ins.rows[0] || null;
+      }
+    }
     if (!hit) return res.status(401).json({ error: 'PIN not recognised' });
     await pool.query(`UPDATE staff SET last_login_at = NOW(), pin_lookup = COALESCE(pin_lookup, $2) WHERE id = $1`, [hit.id, pinLookup(shopId, pin)]);
     const exp = Date.now() + TOKEN_TTL_MS;
     // shop is bound into the token — requireAuth rejects use against another shop.
     const token = signToken({ role: hit.role, name: hit.name, sid: hit.id, shop: shopId, exp });
-    res.json({ token, role: hit.role, name: hit.name, sid: hit.id, expiresAt: exp });
+    res.json({ token, role: hit.role, name: hit.name, sid: hit.id, expiresAt: exp, must_change_pin: !!hit.must_change_pin });
   } catch (err) {
     console.error('[staff/login]', err.message);
     res.status(500).json({ error: 'Sign-in failed' });
@@ -795,6 +813,34 @@ app.post('/api/staff/approve', pinLimiter, async (req, res) => {
   } catch (err) {
     console.error('[staff/approve]', err.message);
     res.status(500).json({ error: 'Approval failed' });
+  }
+});
+// Signed-in staff member sets their OWN PIN (and may fix their display name) —
+// forced after the first-time PIN, available any time from the pad. Owner tokens
+// have no staff row, so they cannot use this.
+app.post('/api/staff/change-pin', requireAuth, async (req, res) => {
+  try {
+    const shopId = await resolveShopId(req);
+    if (!shopId) return res.status(404).json({ error: 'Shop not found' });
+    if (!req.auth?.sid) return res.status(400).json({ error: 'Sign in with a staff PIN first' });
+    const newPin = String(req.body?.new_pin || '');
+    if (!PIN_RE.test(newPin)) return res.status(400).json({ error: 'New PIN must be 4–6 digits' });
+    if (newPin === FIRST_TIME_PIN) return res.status(400).json({ error: 'Choose a PIN other than the first-time PIN' });
+    if (/^(\d)\1+$/.test(newPin) || newPin === '1234' || newPin === '123456') return res.status(400).json({ error: 'That PIN is too easy to guess' });
+    const name = req.body?.name != null ? String(req.body.name).trim().slice(0, 120) : null;
+    const { rows } = await pool.query(
+      `UPDATE staff SET pin_hash = $3, pin_lookup = $4, must_change_pin = FALSE, name = COALESCE(NULLIF($5, ''), name)
+       WHERE id = $1 AND shop_id = $2 AND active = TRUE RETURNING id, name, role`,
+      [req.auth.sid, shopId, hashPassword(newPin), pinLookup(shopId, newPin), name]
+    );
+    if (!rows[0]) return res.status(404).json({ error: 'Staff member not found' });
+    const exp = Date.now() + TOKEN_TTL_MS;
+    const token = signToken({ role: rows[0].role, name: rows[0].name, sid: rows[0].id, shop: shopId, exp });
+    res.json({ token, role: rows[0].role, name: rows[0].name, sid: rows[0].id, expiresAt: exp, must_change_pin: false });
+  } catch (err) {
+    if (err.code === '23505') return res.status(409).json({ error: 'Someone already uses that PIN — pick another' });
+    console.error('[staff/change-pin]', err.message);
+    res.status(500).json({ error: 'Could not change PIN' });
   }
 });
 app.get('/api/staff/me', requireAuth, (req, res) => {

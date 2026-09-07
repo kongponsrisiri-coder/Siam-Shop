@@ -279,6 +279,8 @@ async function initDB() {
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_staff_shop ON staff(shop_id, active)`);
     // O(1) PIN lookup: HMAC(AUTH_SECRET, shop:pin). Unique per shop = PIN uniqueness at the DB level.
     await pool.query(`ALTER TABLE staff ADD COLUMN IF NOT EXISTS pin_lookup TEXT`);
+    // First-time PIN (Korakot 7 Sep): a fresh shop accepts 2526 once, then must change it.
+    await pool.query(`ALTER TABLE staff ADD COLUMN IF NOT EXISTS must_change_pin BOOLEAN NOT NULL DEFAULT FALSE`);
     await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_staff_pin_lookup ON staff(shop_id, pin_lookup) WHERE pin_lookup IS NOT NULL`);
 
     // SIAMSHOP-POST-001 — parcel label printed (postal orders).

@@ -29,6 +29,12 @@ export default function StaffGate({ need = 'staff', title = 'Staff sign in', onI
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [version, setVersion] = useState(null);
+  // First-time PIN flow: the login answered must_change_pin → collect a new PIN
+  // (and a name) before letting them through.
+  const [pending, setPending] = useState(null); // login result awaiting a new PIN
+  const [newName, setNewName] = useState('');
+  const [newPin, setNewPin] = useState('');
+  const [newPin2, setNewPin2] = useState('');
 
   useEffect(() => {
     if (isElectron) desktop.getVersion().then(setVersion).catch(() => {});
@@ -56,10 +62,29 @@ export default function StaffGate({ need = 'staff', title = 'Staff sign in', onI
       }
       auth.set(r.token);
       staffSession.set({ name: r.name, role: r.role, sid: r.sid });
+      if (r.must_change_pin) { setPending(r); setNewName(r.name === 'Manager' ? '' : r.name); setPin(''); setMode('newpin'); return; }
       onIn(r);
     } catch (e) {
       setError(e.message);
       setPin('');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function submitNewPin(e) {
+    e.preventDefault();
+    if (busy) return;
+    if (!/^\d{4,6}$/.test(newPin)) return setError('New PIN must be 4–6 digits');
+    if (newPin !== newPin2) return setError('The two PINs do not match');
+    setBusy(true); setError('');
+    try {
+      const r = await api.staffChangePin({ new_pin: newPin, name: newName.trim() || undefined });
+      auth.set(r.token);
+      staffSession.set({ name: r.name, role: r.role, sid: r.sid });
+      onIn(r);
+    } catch (err) {
+      setError(err.message);
     } finally {
       setBusy(false);
     }
@@ -122,6 +147,23 @@ export default function StaffGate({ need = 'staff', title = 'Staff sign in', onI
             <p style={{ margin: 0 }}>{clocked.repeated ? 'Already clocked' : 'Clocked'} <strong>{clocked.event_type === 'in' ? 'IN' : 'OUT'}</strong> at {new Date(clocked.event_at).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}</p>
             {clocked.repeated && <p className="muted" style={{ margin: '4px 0 0', fontSize: 12 }}>No change made — you tapped twice within a minute.</p>}
           </div>
+        ) : mode === 'newpin' ? (
+          <form onSubmit={submitNewPin} className="gate-form">
+            <div className="tag ok" style={{ marginBottom: 8 }}>👋 Welcome — set your own PIN</div>
+            <p className="muted" style={{ marginTop: 0, fontSize: 13 }}>
+              You signed in with the first-time PIN. Choose your own PIN now — the till will not open until you do.
+              You can add more staff later in Admin → Staff.
+            </p>
+            <label>Your name</label>
+            <input value={newName} onChange={(e) => setNewName(e.target.value)} placeholder="e.g. Korakot" autoFocus />
+            <label>New PIN (4–6 digits)</label>
+            <input type="password" inputMode="numeric" pattern="[0-9]*" maxLength={6} value={newPin} onChange={(e) => { setNewPin(e.target.value.replace(/\D/g, '')); setError(''); }} />
+            <label>Repeat new PIN</label>
+            <input type="password" inputMode="numeric" pattern="[0-9]*" maxLength={6} value={newPin2} onChange={(e) => { setNewPin2(e.target.value.replace(/\D/g, '')); setError(''); }} />
+            {error && <p className="err">{error}</p>}
+            <button className="btn" type="submit" disabled={busy} style={{ width: '100%', marginTop: 8 }}>{busy ? 'Saving…' : 'Save PIN and open the till'}</button>
+            <button type="button" className="btn ghost" style={{ width: '100%', marginTop: 6 }} onClick={() => { auth.clear && auth.clear(); staffSession.clear && staffSession.clear(); setPending(null); setMode('pin'); setError(''); }}>Cancel</button>
+          </form>
         ) : mode === 'pin' || mode === 'clock' ? (
           <>
             {mode === 'clock' && <div className="tag ok" style={{ marginBottom: 6 }}>⏱ Clock in / out — enter your PIN</div>}

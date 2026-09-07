@@ -97,6 +97,7 @@ export const api = {
   // Staff PIN sign-in + management (SIAMSHOP-ELECTRON-001)
   staffLogin: (pin) => request('/api/staff/login', { method: 'POST', body: { pin } }),
   staffMe: () => request('/api/staff/me', { authed: true }),
+  staffChangePin: (body) => request('/api/staff/change-pin', { method: 'POST', body, authed: true }),
   // One-off manager approval (60 s, single use) — SIAMSHOP-DISCOUNT-001
   staffApprove: (body) => request('/api/staff/approve', { method: 'POST', body }),
   adminListStaff: () => request('/api/admin/staff', { authed: true }),
