@@ -126,7 +126,7 @@ check('report: refunds by reason includes Damaged (written off) and wastage list
 const jobs = [];
 const srv = net.createServer((sock) => { const c = []; sock.on('data', (d) => c.push(d)); sock.on('close', () => jobs.push(Buffer.concat(c))); });
 await new Promise((res) => srv.listen(19150, '127.0.0.1', res));
-await ps.printZReport({ ip: '127.0.0.1', port: 19150 }, z, 'Test');
+await ps.printZReport({ ip: '127.0.0.1', port: 19150 }, z, 'Test', { style: 'classic' }); // wording check → printer-font path
 await new Promise((res) => setTimeout(res, 200));
 const text = jobs[0].toString('latin1').replace(/\x1b@|\x1bt.|\x1b%.|\x1b!.|\x1bM.|\x1bG.|\x1ba.|\x1bE.|\x1d!.|\x1dVA./g, '').replace(/\x9c/g, '£');
 check('Z print shows voids + wastage lines', /Voids before payment \(1\)/.test(text) && /Wastage written off \(1\)/.test(text), text.slice(0, 500));

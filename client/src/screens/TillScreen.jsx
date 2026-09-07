@@ -307,6 +307,7 @@ export default function TillScreen() {
       vatNote: st.vat_number ? `VAT No. ${st.vat_number}` : '',
       copies: copies ?? st.receipt_copies ?? 1,
       logo: st.brand_logo || '', showLogo: !!st.receipt_show_logo, logoInvert: !!st.brand_logo_invert, // SIAMSHOP-DEVICE-001 D4
+      style: st.receipt_style || 'rendered', size: st.print_size || 'normal', // SIAMSHOP-PRINT-RENDER-001
       orderId: sale.id,
       staff: sale.staff || staffSession.get()?.name || '',
       createdAt: sale.created_at,

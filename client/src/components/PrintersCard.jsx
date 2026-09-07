@@ -58,7 +58,11 @@ export default function PrintersCard({ onChanged, isManager }) {
     if (p.job === 'label') {
       const { buildLabelHtml, SAMPLE_LABEL } = await import('../label.js');
       r = await desktop.printLabel(await buildLabelHtml(SAMPLE_LABEL), 1, p.usb_name);
-    } else r = await desktop.testPrint(printerDest(p));
+    } else {
+      let o = {};
+      try { const st = await api.getSettings(); o = { style: st.receipt_style || 'rendered', size: st.print_size || 'normal', logo: st.brand_logo || '', showLogo: !!st.receipt_show_logo, logoInvert: !!st.brand_logo_invert, shopName: electronConfig.shopName }; } catch {}
+      r = await desktop.testPrint(printerDest(p), o);
+    }
     await api.printerTestResult(p.id, !!r?.ok).catch(() => {});
     setMsg(r?.ok ? `${p.name}: test sent — check the printer.` : `${p.name}: ${r?.error || 'test failed'}`);
     await load(); setBusy(false);

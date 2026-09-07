@@ -35,7 +35,9 @@ export function usePrepPrinting({ enabled = true } = {}) {
     const printers = await loadPrinters();
     const printer = printers.all.find((p) => p.id === t.printer_id);
     const dest = printerDest(printer);
-    const r = dest ? await desktop.printPrep(t, dest) : { ok: false, error: 'Prep printer missing from the list' };
+    let style = { style: 'rendered', size: 'normal' };
+    try { const st = await api.getSettings(); style = { style: st.receipt_style || 'rendered', size: st.print_size || 'normal' }; } catch {}
+    const r = dest ? await desktop.printPrep({ ...t, ...style }, dest) : { ok: false, error: 'Prep printer missing from the list' };
     await api.prepTicketAck(ticketId, deviceId, !!r.ok, r.error);
     if (!r.ok) { failedAt.current.set(ticketId, Date.now()); setLastError(`${printer?.name || 'Prep printer'}: ${r.error}`); }
     else { failedAt.current.delete(ticketId); setLastError(''); }

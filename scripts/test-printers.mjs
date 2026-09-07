@@ -73,7 +73,7 @@ check('sale 201 with one prep ticket for the Kitchen printer', r.status === 201 
 r = await req('POST', '/api/sales', { items: [{ product_id: rice.id, qty: 2 }], payment_method: 'card' }, cashTok, { 'X-Device-Id': 'till-1' });
 check('grocery-only sale → no prep ticket', r.status === 201 && r.data.prep_tickets.length === 0, r.data.prep_tickets);
 // The till would now print: receipt (drawer) on A via printService, ticket on B after claiming.
-await ps.printReceipt({ ip: '127.0.0.1', port: 19201 }, { shopName: 'Prn Shop', orderId: sale.id, items: [{ name: 'Prn Pad Thai Box', qty: 1, line_total: 8, unit_price: 8 }, { name: 'Prn Rice 5kg', qty: 1, line_total: 12, unit_price: 12 }], subtotal: 20, total: 20, payment_method: 'cash', amount_tendered: 20, change_given: 0 });
+await ps.printReceipt({ ip: '127.0.0.1', port: 19201 }, { style: 'classic', shopName: 'Prn Shop', orderId: sale.id, items: [{ name: 'Prn Pad Thai Box', qty: 1, line_total: 8, unit_price: 8 }, { name: 'Prn Rice 5kg', qty: 1, line_total: 12, unit_price: 12 }], subtotal: 20, total: 20, payment_method: 'cash', amount_tendered: 20, change_given: 0 });
 await ps.openCashDrawer({ ip: '127.0.0.1', port: 19201 });
 const ticketId = sale.prep_tickets[0].id;
 r = await req('POST', `/api/prep/tickets/${ticketId}/claim`, { device_id: 'till-1' }, cashTok);
@@ -83,7 +83,7 @@ r = await req('POST', `/api/prep/tickets/${ticketId}/claim`, { device_id: 'till-
 check('second till claiming the same ticket → 409', r.status === 409 && r.data.code === 'claimed');
 r = await req('POST', '/api/prep/tickets/999999/claim', { device_id: 'till-2' }, cashTok);
 check('claiming a ticket that does not exist → 404 (Krit)', r.status === 404);
-await ps.printPrepTicket({ ip: '127.0.0.1', port: 19202 }, ticket);
+await ps.printPrepTicket({ ip: '127.0.0.1', port: 19202 }, { ...ticket, style: 'classic' });
 r = await req('POST', `/api/prep/tickets/${ticketId}/ack`, { device_id: 'till-2', ok: true }, cashTok);
 check('ack from a device that did not claim → 409', r.status === 409);
 r = await req('POST', `/api/prep/tickets/${ticketId}/ack`, { device_id: 'till-1', ok: true }, cashTok);
@@ -156,7 +156,7 @@ check('reprint creates a new seq-1 ticket for the order', r.status === 201 && r.
 const rp = (await req('POST', `/api/prep/tickets/${r.data.prep_tickets[0].id}/claim`, { device_id: 'till-2' }, cashTok)).data.ticket;
 check('reprint payload flagged', rp.reprint === true);
 const C = await listen(19203);
-await ps.printPrepTicket({ ip: '127.0.0.1', port: 19203 }, rp);
+await ps.printPrepTicket({ ip: '127.0.0.1', port: 19203 }, { ...rp, style: 'classic' });
 await new Promise((res) => setTimeout(res, 200));
 check('reprinted ticket bytes say REPRINT', /REPRINT/.test(strip(Buffer.concat(C.jobs))));
 r = await req('POST', '/api/prep/tickets/reprint', { order_id: (await req('POST', '/api/sales', { items: [{ product_id: rice.id, qty: 1 }], payment_method: 'cash' }, cashTok)).data.id }, cashTok);
