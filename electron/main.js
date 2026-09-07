@@ -236,7 +236,7 @@ async function runSetupWizard() {
   label { display:block; font-size:12px; font-weight:700; color:rgba(255,255,255,0.85); margin:12px 0 6px; text-transform:uppercase; letter-spacing:0.05em; }
   .fieldrow { display:flex; gap:8px; align-items:stretch; }
   .fieldrow input { flex:1; }
-  .pastebtn { flex:none; padding:0 12px; border-radius:10px; cursor:pointer; border:1px solid rgba(201,168,76,0.4); background:rgba(201,168,76,0.12); color:#C9A84C; font-size:12px; font-weight:700; white-space:nowrap; }
+  .pastebtn { flex:none; width:auto; margin-top:0; padding:0 14px; border-radius:10px; cursor:pointer; border:1px solid rgba(201,168,76,0.4); background:rgba(201,168,76,0.12); color:#C9A84C; font-size:12px; font-weight:700; white-space:nowrap; }
   input { width:100%; padding:10px 14px; border-radius:10px; border:1px solid rgba(201,168,76,0.3); background:rgba(255,255,255,0.05); color:white; font-size:15px; box-sizing:border-box; font-family:inherit; }
   input:focus { outline:none; border-color:#C9A84C; background:rgba(255,255,255,0.08); }
   .hint { font-size:11px; color:rgba(255,255,255,0.45); margin-top:4px; }
