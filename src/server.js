@@ -1082,6 +1082,10 @@ app.get('/api/settings', async (req, res) => {
       brand_primary: BRAND_HEX.test(s.brand_primary || '') ? s.brand_primary : '',
       brand_accent: BRAND_HEX.test(s.brand_accent || '') ? s.brand_accent : '',
       brand_logo: isLogoDataUrl(s.brand_logo) ? s.brand_logo : '',
+      // A separate picture for paper. A logo drawn for a dark app header often
+      // prints as a black slab, so the shop can give the printer its own
+      // artwork; empty means "use the app logo" (Korakot, 8 Sep).
+      receipt_logo: isLogoDataUrl(s.receipt_logo) ? s.receipt_logo : '',
       brand_logo_invert: s.brand_logo_invert === '1' || s.brand_logo_invert === 'true',
       // SIAMSHOP-503/504 — hours + collection (null hours = always open).
       timezone: ctx.tz,
@@ -1940,7 +1944,7 @@ app.put('/api/admin/settings', requireAuth, async (req, res) => {
       if ((key === 'brand_primary' || key === 'brand_accent') && value !== '' && !BRAND_HEX.test(String(value))) {
         return res.status(400).json({ error: `${key} must be a hex colour like #0D1B3E` });
       }
-      if (key === 'brand_logo' && value !== '' && !isLogoDataUrl(String(value))) {
+      if ((key === 'brand_logo' || key === 'receipt_logo') && value !== '' && !isLogoDataUrl(String(value))) {
         return res.status(400).json({ error: 'Logo must be a PNG/JPEG/WebP image under 400 KB' });
       }
       if (key === 'receipt_style' && !['rendered', 'classic'].includes(String(value))) {
@@ -3505,7 +3509,7 @@ function sampleReceipt(settings, shop) {
       { name: 'Tiparos Fish Sauce 300ml', qty: 2, line_total: 3, unit_price: 1.5, options: [] },
     ],
     subtotal: 32.6, total: 32.6, payment_method: 'cash', amount_tendered: 40, change_given: 7.4,
-    logo: settings.brand_logo || '', showLogo: settings.receipt_show_logo === '1' || settings.receipt_show_logo === 'true',
+    logo: settings.receipt_logo || settings.brand_logo || '', showLogo: settings.receipt_show_logo === '1' || settings.receipt_show_logo === 'true',
     logoInvert: settings.brand_logo_invert === '1' || settings.brand_logo_invert === 'true',
     style: settings.receipt_style === 'classic' ? 'classic' : 'rendered',
     size: settings.print_size === 'large' ? 'large' : 'normal',
