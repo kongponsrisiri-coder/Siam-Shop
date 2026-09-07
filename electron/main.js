@@ -166,6 +166,14 @@ ipcMain.handle('siamshop:print-receipt', async (event, payload) => {
     return { ok: false, error: e.message };
   }
 });
+ipcMain.handle('siamshop:print-z', async (event, payload) => {
+  try {
+    await printService.printZReport(printerCfg(), payload?.z || {}, payload?.shopName || rendererConfig().shopName || 'SiamShop');
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
 ipcMain.handle('siamshop:kick-drawer', async () => {
   try { await printService.openCashDrawer(printerCfg()); return { ok: true }; }
   catch (e) { return { ok: false, error: e.message }; }

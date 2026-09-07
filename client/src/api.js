@@ -38,9 +38,9 @@ export const customerAuth = {
   clear: () => localStorage.removeItem(CUSTOMER_TOKEN_KEY),
 };
 
-async function request(path, { method = 'GET', body, authed = false, customerAuthed = false } = {}) {
+async function request(path, { method = 'GET', body, authed = false, customerAuthed = false, token } = {}) {
   const headers = { 'Content-Type': 'application/json' };
-  if (authed) headers.Authorization = `Bearer ${auth.get()}`;
+  if (authed) headers.Authorization = `Bearer ${token || auth.get()}`; // token = one-off manager override (PIN modal)
   if (customerAuthed) headers.Authorization = `Bearer ${customerAuth.get()}`;
 
   const res = await fetch(`${API_BASE}${withShop(path)}`, {
@@ -192,6 +192,14 @@ export const api = {
     if (!res.ok) throw new Error('Export failed');
     return res.blob();
   },
+
+  // Till sessions + Z report (SIAMSHOP-TILL-001). `token` = manager PIN override for close.
+  tillSession: () => request('/api/till/session', { authed: true }),
+  tillOpen: (float_amount) => request('/api/till/session/open', { method: 'POST', body: { float_amount }, authed: true }),
+  tillSetFloat: (float_amount) => request('/api/till/session/float', { method: 'PUT', body: { float_amount }, authed: true }),
+  tillClose: (counted_cash, notes, token) => request('/api/till/session/close', { method: 'POST', body: { counted_cash, notes }, authed: true, token }),
+  tillSessions: () => request('/api/till/sessions', { authed: true }),
+  tillSessionDetail: (id) => request(`/api/till/sessions/${id}`, { authed: true }),
 
   // In-store till (staff)
   lookupBarcode: (code) => request(`/api/products/lookup?barcode=${encodeURIComponent(code)}`, { authed: true }),

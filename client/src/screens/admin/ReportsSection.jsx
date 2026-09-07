@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { api } from '../../api.js';
+import { ZSummary, PrintZButton } from '../../components/TillSession.jsx';
 
 const money = (n) => '£' + Number(n || 0).toFixed(2);
 const CHANNEL_LABEL = { online: 'Online', instore: 'In-store (till)', messenger: 'Messenger' };
@@ -8,6 +9,59 @@ function isoDaysAgo(n) {
   const d = new Date();
   d.setDate(d.getDate() - n);
   return d.toISOString().slice(0, 10);
+}
+
+// Z reports — closed till sessions (SIAMSHOP-TILL-001).
+function ZReports() {
+  const [list, setList] = useState(null);
+  const [open, setOpen] = useState(null); // { session, summary }
+  const [error, setError] = useState('');
+  useEffect(() => { api.tillSessions().then(setList).catch((e) => setError(e.message)); }, []);
+  async function show(id) {
+    try { setOpen(await api.tillSessionDetail(id)); } catch (e) { setError(e.message); }
+  }
+  return (
+    <div className="panel">
+      <h3 style={{ marginTop: 0 }}>Z reports (till cash-ups)</h3>
+      {error && <p className="err">{error}</p>}
+      {list === null && <p className="muted">Loading…</p>}
+      {list && list.length === 0 && <p className="muted">No till sessions yet — open the till on the Till screen.</p>}
+      {list && list.length > 0 && (
+        <table>
+          <thead><tr><th>#</th><th>Opened</th><th>Closed</th><th>Sales</th><th style={{ textAlign: 'right' }}>Expected</th><th style={{ textAlign: 'right' }}>Counted</th><th style={{ textAlign: 'right' }}>Variance</th><th></th></tr></thead>
+          <tbody>
+            {list.map((z) => (
+              <tr key={z.id} className="order-row" onClick={() => show(z.id)}>
+                <td><strong>#{z.id}</strong> {z.status === 'open' && <span className="tag ok">open</span>}</td>
+                <td>{new Date(z.opened_at).toLocaleString()}<div className="muted" style={{ fontSize: 12 }}>{z.opened_by}</div></td>
+                <td>{z.closed_at ? new Date(z.closed_at).toLocaleString() : '—'}{z.closed_by && <div className="muted" style={{ fontSize: 12 }}>{z.closed_by}</div>}</td>
+                <td>{z.sales_count ?? '—'}{z.gross != null ? ` · ${money(z.gross)}` : ''}</td>
+                <td style={{ textAlign: 'right' }}>{z.expected_cash != null ? money(z.expected_cash) : '—'}</td>
+                <td style={{ textAlign: 'right' }}>{z.counted_cash != null ? money(z.counted_cash) : '—'}</td>
+                <td style={{ textAlign: 'right', fontWeight: 700, color: z.variance == null ? undefined : Math.abs(z.variance) < 0.005 ? '#16a34a' : z.variance < 0 ? '#b91c1c' : '#b45309' }}>
+                  {z.variance != null ? `${z.variance > 0 ? '+' : ''}${money(z.variance)}` : '—'}
+                </td>
+                <td><button className="btn mini secondary" onClick={(e) => { e.stopPropagation(); show(z.id); }}>View</button></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      {open && (
+        <div className="till-modal" onClick={() => setOpen(null)}>
+          <div className="till-receipt" style={{ width: 440 }} onClick={(e) => e.stopPropagation()}>
+            <h3 style={{ marginTop: 0 }}>Z report — session #{open.session.id}</h3>
+            <ZSummary z={open.summary} />
+            <div className="row" style={{ gap: 8, marginTop: 12 }}>
+              <PrintZButton z={open.summary} label="🖨 Reprint Z" />
+              <div className="spacer" />
+              <button className="btn secondary" onClick={() => setOpen(null)}>Close</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }
 
 export default function ReportsSection() {
@@ -39,7 +93,9 @@ export default function ReportsSection() {
 
   return (
     <div>
-      <h2 style={{ marginBottom: 8 }}>Sales report</h2>
+      <h2 style={{ marginBottom: 8 }}>Reports</h2>
+      <ZReports />
+      <h3 style={{ marginBottom: 8 }}>Sales report</h3>
 
       <form className="panel" onSubmit={run}>
         <div className="row" style={{ gap: 12, flexWrap: 'wrap', alignItems: 'flex-end' }}>

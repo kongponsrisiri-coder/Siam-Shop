@@ -129,6 +129,46 @@ function buildReceipt(r) {
   ]);
 }
 
+// ── Z report / cash-up (SIAMSHOP-TILL-001) ────────────────────────────────────
+// z = the session summary from GET /api/till/sessions/:id (+ shopName).
+function buildZReport(z, shopName = 'SiamShop') {
+  const fmt = (d) => (d ? new Date(d).toLocaleString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—');
+  const sign = (n) => (Number(n) > 0 ? '+' : Number(n) < 0 ? '-' : '') + money(Math.abs(Number(n || 0)));
+  return flatten([
+    CMD.INIT, CMD.ALIGN_CENTER,
+    CMD.BOLD_ON, CMD.SIZE_BIG, txt('Z REPORT'), CMD.SIZE_NORMAL, CMD.BOLD_OFF, lf(),
+    txt(String(shopName).slice(0, LINE_WIDTH)), lf(),
+    txt(`Session #${z.session_id}${z.closed_at ? '' : ' (OPEN — provisional)'}`), lf(),
+    CMD.ALIGN_LEFT, rule(), lf(),
+    col2('Opened', fmt(z.opened_at)), lf(),
+    col2('By', String(z.opened_by || '').slice(0, 20)), lf(),
+    col2('Closed', fmt(z.closed_at)), lf(),
+    z.closed_by ? [col2('By', String(z.closed_by).slice(0, 20)), lf()] : [],
+    rule(), lf(),
+    CMD.BOLD_ON, txt('SALES (till)'), CMD.BOLD_OFF, lf(),
+    col2(`Cash sales`, money(z.sales?.cash)), lf(),
+    col2(`Card sales`, money(z.sales?.card)), lf(),
+    col2(`Sales (${z.sales?.count || 0} / ${z.sales?.items || 0} items)`, money(z.sales?.gross)), lf(),
+    col2(`Refunds (${z.refunds?.count || 0})`, '-' + money(z.refunds?.total)), lf(),
+    Number(z.discounts?.total) ? [col2(`Discounts (${z.discounts.count})`, '-' + money(z.discounts.total)), lf()] : [],
+    CMD.BOLD_ON, col2('NET TAKINGS', money(z.net)), CMD.BOLD_OFF, lf(),
+    rule(), lf(),
+    CMD.BOLD_ON, txt('CASH DRAWER'), CMD.BOLD_OFF, lf(),
+    col2('Opening float', money(z.float_amount)), lf(),
+    col2('+ Cash sales', money(z.sales?.cash)), lf(),
+    col2('- Cash refunds', money(z.refunds?.cash)), lf(),
+    CMD.BOLD_ON, col2('EXPECTED', money(z.expected_cash)), CMD.BOLD_OFF, lf(),
+    z.counted_cash != null ? [
+      col2('Counted', money(z.counted_cash)), lf(),
+      CMD.BOLD_ON, CMD.SIZE_TALL, col2('VARIANCE', sign(z.variance)), CMD.SIZE_NORMAL, CMD.BOLD_OFF, lf(),
+    ] : [],
+    rule(), lf(),
+    z.online?.count ? [txt(`Online orders paid in shift: ${z.online.count} (${money(z.online.gross)}) - not in drawer`), lf()] : [],
+    z.notes ? wrap('Notes: ' + z.notes, LINE_WIDTH).map((l) => [txt(l), lf()]) : [],
+    lf(), CMD.ALIGN_CENTER, txt(`Printed ${fmt(new Date())}`), lf(3), CMD.CUT,
+  ]);
+}
+
 function buildTestPage(info = {}) {
   const now = new Date().toLocaleString('en-GB');
   const target = info.ip ? `${info.ip}:${info.port || 9100}` : '';
@@ -393,9 +433,13 @@ async function openCashDrawer(printer) {
   const d = dest(printer);
   await sendRaw(d.ip, d.port, CMD.DRAWER_KICK, { printerName: d.printerName, lprQueue: d.lprQueue, lprPort: d.lprPort });
 }
+async function printZReport(printer, z, shopName) {
+  const d = dest(printer);
+  await sendRaw(d.ip, d.port, buildZReport(z, shopName), { printerName: d.printerName, lprQueue: d.lprQueue, lprPort: d.lprPort });
+}
 async function testPrint(printer) {
   const d = dest(printer);
   await sendRaw(d.ip, d.port, buildTestPage({ ip: d.ip, port: d.port, name: d.printerName }), { printerName: d.printerName, lprQueue: d.lprQueue, lprPort: d.lprPort });
 }
 
-module.exports = { printReceipt, openCashDrawer, testPrint, buildReceipt, buildTestPage, findCupsQueueForIp, LINE_WIDTH, CMD };
+module.exports = { printReceipt, openCashDrawer, testPrint, printZReport, buildReceipt, buildZReport, buildTestPage, findCupsQueueForIp, LINE_WIDTH, CMD };
