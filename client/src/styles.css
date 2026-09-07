@@ -560,3 +560,5 @@ th { color: var(--muted); font-weight: 600; }
 .brand-logo-preview { max-height: 72px; max-width: 260px; display: block; }
 .brand-logo-dark { background: var(--navy); padding: 10px 14px; border-radius: 10px; display: inline-block; }
 .test-scan-box { font-size: 20px; letter-spacing: 1px; font-family: ui-monospace, Menlo, monospace; }
+
+.print-preview-paper { background: #fff; border: 1px solid var(--line); border-radius: 6px; padding: 10px; display: inline-flex; align-items: center; justify-content: center; min-width: 200px; min-height: 40px; box-shadow: inset 0 0 0 1px #f3f3f3; }

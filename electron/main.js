@@ -174,9 +174,9 @@ function printerCfg() { return rendererConfig().printer; }
 // ≤384-dot-wide bitmap → GS v 0 via raster.js. Cached per logo content.
 const _logoCache = new Map(); // hash → Buffer
 const LOGO_W = 384, LOGO_MAX_H = 200;
-function logoRaster(dataUrl) {
+function logoRaster(dataUrl, invert = false) {
   if (!dataUrl || typeof dataUrl !== 'string' || !dataUrl.startsWith('data:image/')) return null;
-  const key = raster.hashString(dataUrl);
+  const key = raster.hashString(dataUrl) + (invert ? ':inv' : '');
   if (_logoCache.has(key)) return _logoCache.get(key);
   let out = null;
   try {
@@ -187,7 +187,7 @@ function logoRaster(dataUrl) {
       const w = Math.max(8, Math.round(sz.width * scale)), h = Math.max(1, Math.round(sz.height * scale));
       img = img.resize({ width: w, height: h, quality: 'best' });
       const { width, height } = img.getSize();
-      out = raster.bitmapToEscPos({ width, height, data: img.toBitmap(), channels: 4, order: 'bgra' });
+      out = raster.bitmapToEscPos({ width, height, data: img.toBitmap(), channels: 4, order: 'bgra', invert: !!invert });
     }
   } catch (e) { console.warn('[print] logo raster failed:', e.message); }
   _logoCache.set(key, out);
@@ -197,7 +197,7 @@ ipcMain.handle('siamshop:print-receipt', async (event, payload) => {
   try {
     const copies = Math.min(3, Math.max(1, parseInt(payload?.copies, 10) || 1));
     const p = { ...(payload || {}) };
-    if (p.showLogo && p.logo) p.logoRaster = logoRaster(p.logo);
+    if (p.showLogo && p.logo) p.logoRaster = logoRaster(p.logo, !!p.logoInvert);
     delete p.logo;
     for (let i = 0; i < copies; i++) await printService.printReceipt(printerCfg(), p);
     return { ok: true, copies };

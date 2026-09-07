@@ -56,6 +56,13 @@ console.log('— D4 raster: pixels → GS v 0');
   // width padding to a byte boundary
   const odd = raster.packBitmap({ width: 10, height: 1, data: Buffer.alloc(40, 255).fill(0, 0, 3) });
   check('width 10 → 2 bytes, pixel 0 black only', odd.widthBytes === 2 && odd.bytes[0] === 0x80 && odd.bytes[1] === 0, odd.bytes);
+  // invert: same pixels print the light parts; transparent stays paper either way
+  const inv = raster.packBitmap({ width: 8, height: 1, data: bgra, order: 'bgra', invert: true });
+  check('invert flips ink except transparency', inv.bytes[0] === 0b00010000, inv.bytes[0].toString(2));
+  const tInv = Buffer.alloc(8 * 4, 0); // black, alpha 0
+  check('invert keeps transparent pixels white', raster.packBitmap({ width: 8, height: 1, data: tInv, invert: true }).bytes[0] === 0);
+  check('darkRatio: 16×2 sample = 17/32', Math.abs(raster.darkRatio(packed, w) - 17 / 32) < 1e-9, raster.darkRatio(packed, w));
+  check('darkRatio > 0.5 flags a dark-background logo', raster.darkRatio(pb, 8) > 0.5 && raster.darkRatio(inv, 8) < 0.5);
   let threw = false; try { raster.packBitmap({ width: 700, height: 1, data: Buffer.alloc(2800) }); } catch { threw = true; }
   check('width > 576 dots rejected', threw);
   // through buildReceipt: raster first (after INIT + ALIGN_CENTER), then the shop name
@@ -116,6 +123,8 @@ console.log('— D3 brand settings API');
   check('save brand → 200', r.status === 200 && r.data.brand_primary === '#0B3D2E', r.data && r.data.brand_primary);
   const pub = (await req('GET', '/api/settings')).data;
   check('public settings expose brand + receipt_show_logo', pub.brand_primary === '#0B3D2E' && pub.brand_accent === '#D4AF37' && pub.brand_logo === PNG && pub.receipt_show_logo === true, { p: pub.brand_primary, a: pub.brand_accent, l: (pub.brand_logo || '').slice(0, 20), s: pub.receipt_show_logo });
+  await req('PUT', '/api/admin/settings', { brand_logo_invert: '1' }, owner);
+  check('brand_logo_invert exposed publicly', (await req('GET', '/api/settings')).data.brand_logo_invert === true);
   r = await req('PUT', '/api/admin/settings', { brand_primary: 'red' }, owner);
   check('non-hex colour → 400', r.status === 400, r.data);
   r = await req('PUT', '/api/admin/settings', { brand_logo: 'javascript:alert(1)' }, owner);

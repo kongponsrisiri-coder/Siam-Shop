@@ -1064,6 +1064,7 @@ app.get('/api/settings', async (req, res) => {
       brand_primary: BRAND_HEX.test(s.brand_primary || '') ? s.brand_primary : '',
       brand_accent: BRAND_HEX.test(s.brand_accent || '') ? s.brand_accent : '',
       brand_logo: isLogoDataUrl(s.brand_logo) ? s.brand_logo : '',
+      brand_logo_invert: s.brand_logo_invert === '1' || s.brand_logo_invert === 'true',
       // SIAMSHOP-503/504 — hours + collection (null hours = always open).
       timezone: ctx.tz,
       opening_hours: ctx.hours,

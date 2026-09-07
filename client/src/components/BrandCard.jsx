@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { api } from '../api.js';
 import { applyBrandTheme, fileToLogoDataUrl, BRAND_PRESETS, DEFAULT_PRIMARY, DEFAULT_ACCENT, isHex } from '../theme.js';
 import { LotusBadge } from './Logo.jsx';
+import { renderPrintPreview } from '../logoPreview.js';
 
 // Admin → Settings → Brand (SIAMSHOP-DEVICE-001 D3/D4): the shop's logo and two
 // colours, saved as shop settings and applied live. "Reset to SiamShop" clears
@@ -11,6 +12,16 @@ export default function BrandCard({ settings, onSaved }) {
   const [accent, setAccent] = useState(settings?.brand_accent || DEFAULT_ACCENT);
   const [logo, setLogo] = useState(settings?.brand_logo || '');
   const [showLogo, setShowLogo] = useState(settings?.receipt_show_logo === '1' || settings?.receipt_show_logo === true || settings?.receipt_show_logo === 'true');
+  const [invert, setInvert] = useState(settings?.brand_logo_invert === '1' || settings?.brand_logo_invert === true || settings?.brand_logo_invert === 'true');
+  const [printPreview, setPrintPreview] = useState(null); // { dataUrl, darkRatio, width, height }
+  // Exactly what the receipt printer will produce (same rules as electron/raster.js).
+  useEffect(() => {
+    let alive = true;
+    if (!logo) { setPrintPreview(null); return undefined; }
+    renderPrintPreview(logo, { invert }).then((r) => { if (alive) setPrintPreview(r); }).catch(() => { if (alive) setPrintPreview(null); });
+    return () => { alive = false; };
+  }, [logo, invert]);
+  const tooDark = printPreview && printPreview.darkRatio > 0.5;
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState('');
 
@@ -28,7 +39,7 @@ export default function BrandCard({ settings, onSaved }) {
   async function save(values) {
     setBusy(true); setMsg('');
     try {
-      const body = values || { brand_primary: primary, brand_accent: accent, brand_logo: logo, receipt_show_logo: showLogo ? '1' : '0' };
+      const body = values || { brand_primary: primary, brand_accent: accent, brand_logo: logo, receipt_show_logo: showLogo ? '1' : '0', brand_logo_invert: invert ? '1' : '0' };
       const saved = await api.adminUpdateSettings(body);
       applyBrandTheme(saved);
       onSaved && onSaved(saved);
@@ -38,7 +49,8 @@ export default function BrandCard({ settings, onSaved }) {
   }
   function reset() {
     setPrimary(DEFAULT_PRIMARY); setAccent(DEFAULT_ACCENT); setLogo('');
-    save({ brand_primary: '', brand_accent: '', brand_logo: '', receipt_show_logo: showLogo ? '1' : '0' });
+    setInvert(false);
+    save({ brand_primary: '', brand_accent: '', brand_logo: '', receipt_show_logo: showLogo ? '1' : '0', brand_logo_invert: '0' });
   }
   const preview = { primary: isHex(primary) ? primary : DEFAULT_PRIMARY, accent: isHex(accent) ? accent : DEFAULT_ACCENT };
 
@@ -65,6 +77,25 @@ export default function BrandCard({ settings, onSaved }) {
             <input type="checkbox" style={{ width: 'auto' }} checked={showLogo} onChange={(e) => setShowLogo(e.target.checked)} />
             <span>Print the logo at the top of till receipts</span>
           </label>
+          {logo && (
+            <div style={{ marginTop: 10 }}>
+              <label>On the receipt (black and white, as the printer sees it)</label>
+              <div className="print-preview-paper">
+                {printPreview ? <img src={printPreview.dataUrl} alt="Receipt logo preview" style={{ width: Math.round(printPreview.width / 2), height: Math.round(printPreview.height / 2), imageRendering: 'pixelated' }} /> : <span className="muted" style={{ fontSize: 12 }}>Rendering…</span>}
+              </div>
+              {printPreview && (
+                <p className={tooDark ? 'err' : 'muted'} style={{ fontSize: 12, margin: '6px 0 0' }}>
+                  {tooDark
+                    ? `⚠ This logo will print mostly black (${Math.round(printPreview.darkRatio * 100)}% ink) — use a version with a light background, or try "Invert".`
+                    : `${Math.round(printPreview.darkRatio * 100)}% ink · ${printPreview.width}×${printPreview.height} dots`}
+                </p>
+              )}
+              <label className="row" style={{ gap: 8, marginTop: 6 }}>
+                <input type="checkbox" style={{ width: 'auto' }} checked={invert} onChange={(e) => setInvert(e.target.checked)} />
+                <span>Invert (for logos drawn light-on-dark)</span>
+              </label>
+            </div>
+          )}
         </div>
         <div style={{ flex: '1 1 260px' }}>
           <label>Colours</label>
