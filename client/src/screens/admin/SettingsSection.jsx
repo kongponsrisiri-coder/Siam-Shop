@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { api } from '../../api.js';
-import { receiptPreview } from '../../receiptPreview.js';
+import ReceiptPreview from '../../components/ReceiptPreview.jsx';
 import BrandCard from '../../components/BrandCard.jsx';
 
 // Editable fields driven by adminGetSettings / adminUpdateSettings. Values are
@@ -212,7 +212,15 @@ export default function SettingsSection() {
                 </div>
               </div>
             </div>
-            <pre className="receipt-preview" style={{ flex: '0 0 auto' }}>{receiptPreview({ shopName: shop?.name || 'SiamShop', header: form.receipt_header, footer: form.receipt_footer, vatNumber: form.vat_number })}</pre>
+            <ReceiptPreview
+              shopName={shop?.name || 'SiamShop'}
+              header={form.receipt_header}
+              footer={form.receipt_footer}
+              vatNumber={form.vat_number}
+              logo={form.brand_logo}
+              showLogo={form.receipt_show_logo === '1' || form.receipt_show_logo === true || form.receipt_show_logo === 'true'}
+              invert={form.brand_logo_invert === '1' || form.brand_logo_invert === true || form.brand_logo_invert === 'true'}
+            />
           </div>
 
           <h3 style={{ marginTop: 20 }}>Discounts</h3>

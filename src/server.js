@@ -3455,6 +3455,9 @@ app.get('/api/admin/report', requireAuth, async (req, res) => {
 // Printers (SIAMSHOP-PRINTERS-001): shop-wide list with jobs; prep tickets queue.
 // ---------------------------------------------------------------------------
 const PRINTER_JOBS = ['receipt', 'prep', 'label'];
+// 'label' = any printer that is NOT the 80 mm thermal — parcel labels, shelf
+// labels, A4 — so the paper size travels with the printer.
+const PRINTER_PAPERS = ['label4x6', 'label4x2', 'label2x1', 'a4', 'a5'];
 function printerBody(b = {}) {
   const kind = b.kind === 'usb' ? 'usb' : 'network';
   const out = {
@@ -3466,6 +3469,7 @@ function printerBody(b = {}) {
     usb_name: kind === 'usb' ? String(b.usb_name || '').trim().slice(0, 200) : null,
     model: String(b.model || '').trim().slice(0, 120) || null,
     job: PRINTER_JOBS.includes(b.job) ? b.job : 'receipt',
+    paper: PRINTER_PAPERS.includes(b.paper) ? b.paper : 'label4x6',
     prep_categories: Array.isArray(b.prep_categories) ? b.prep_categories.map((x) => parseInt(x, 10)).filter(Number.isInteger) : [],
     active: b.active == null ? true : !!b.active,
   };
@@ -3494,9 +3498,9 @@ app.post('/api/admin/printers', requireAuth, requireManager, async (req, res) =>
     if (!shopId) return res.status(404).json({ error: 'Shop not found' });
     const b = printerBody(req.body);
     const { rows } = await pool.query(
-      `INSERT INTO printers (shop_id, name, kind, ip, port, lpr_queue, usb_name, model, job, prep_categories, active)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
-      [shopId, b.name, b.kind, b.ip, b.port, b.lpr_queue, b.usb_name, b.model, b.job, b.prep_categories, b.active]
+      `INSERT INTO printers (shop_id, name, kind, ip, port, lpr_queue, usb_name, model, job, prep_categories, active, paper)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *`,
+      [shopId, b.name, b.kind, b.ip, b.port, b.lpr_queue, b.usb_name, b.model, b.job, b.prep_categories, b.active, b.paper]
     );
     res.status(201).json(rows[0]);
   } catch (err) {
@@ -3513,9 +3517,9 @@ app.put('/api/admin/printers/:id', requireAuth, requireManager, async (req, res)
     if (!cur[0]) return res.status(404).json({ error: 'Printer not found' });
     const b = printerBody({ ...cur[0], ...req.body, prep_categories: req.body.prep_categories ?? cur[0].prep_categories });
     const { rows } = await pool.query(
-      `UPDATE printers SET name=$3, kind=$4, ip=$5, port=$6, lpr_queue=$7, usb_name=$8, model=$9, job=$10, prep_categories=$11, active=$12
+      `UPDATE printers SET name=$3, kind=$4, ip=$5, port=$6, lpr_queue=$7, usb_name=$8, model=$9, job=$10, prep_categories=$11, active=$12, paper=$13
        WHERE id = $1 AND shop_id = $2 RETURNING *`,
-      [req.params.id, shopId, b.name, b.kind, b.ip, b.port, b.lpr_queue, b.usb_name, b.model, b.job, b.prep_categories, b.active]
+      [req.params.id, shopId, b.name, b.kind, b.ip, b.port, b.lpr_queue, b.usb_name, b.model, b.job, b.prep_categories, b.active, b.paper]
     );
     res.json(rows[0]);
   } catch (err) {
