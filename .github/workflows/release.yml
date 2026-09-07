@@ -172,8 +172,11 @@ jobs:
   release:
     needs: [build-mac, build-windows]
     runs-on: ubuntu-latest
-    # Publish on a v* tag as long as Windows built — a Mac notarisation hiccup must not block the Windows release.
-    if: always() && startsWith(github.ref, 'refs/tags/v') && needs.build-windows.result == 'success'
+    # A release is 8 assets or nothing (Krit, v0.1.8): a partial Windows-only release
+    # became "latest" with no latest-mac.yml and every Mac updater saw ERR_FAILED.
+    # Default condition = both builds succeeded. Shipping one platform alone is a
+    # manual decision, never the pipeline's.
+    if: startsWith(github.ref, 'refs/tags/v')
     permissions:
       contents: write
     steps:
@@ -190,7 +193,7 @@ jobs:
           tag_name: ${{ github.ref_name }}
           name: SiamShop ${{ github.ref_name }}
           generate_release_notes: true
-          fail_on_unmatched_files: false
+          fail_on_unmatched_files: true
           files: |
             dist/**/*.dmg
             dist/**/*.zip
@@ -207,7 +210,7 @@ jobs:
           tag_name: ${{ github.ref_name }}
           name: SiamShop ${{ github.ref_name }}
           generate_release_notes: true
-          fail_on_unmatched_files: false
+          fail_on_unmatched_files: true
           # Recursive globs: download-artifact@v5 nests each artifact in its own
           # folder when there are several, but lays a SINGLE artifact flat in dist/
           # (v0.1.0: Mac failed → only windows-installer → 0 assets published).
