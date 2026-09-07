@@ -32,6 +32,7 @@ export function resolvePrinters(list, cfg = electronConfig) {
     prep: printers.filter((p) => p.job === 'prep'),
     label,
     labelName: label?.kind === 'usb' ? label.usb_name : (cfg.labelPrinter || ''),
+    labelPaper: label?.paper || 'label4x6',
     printingDeviceId: list?.printing_device_id || null,
   };
 }

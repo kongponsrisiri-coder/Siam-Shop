@@ -320,7 +320,19 @@ ipcMain.handle('siamshop:list-printers', async () => {
 // Label printers speak ZPL/TSPL/raster per brand, so the label goes through
 // the OS DRIVER: render the HTML in a hidden window and print silently at
 // 4×6 in (101600 × 152400 µm) to the configured label printer. Not ESC/POS.
-const LABEL_PAGE = { width: 101600, height: 152400 };
+// A 'label' printer is anything that is NOT the 80 mm thermal, so the page size
+// comes from the printer's `paper` setting rather than being fixed at 4x6.
+// Sizes are microns (Electron's pageSize); labels print edge to edge, paper
+// sizes keep the driver's printable area.
+const PAPER = {
+  label4x6: { page: { width: 101600, height: 152400 }, margins: { marginType: 'none' } },
+  label4x2: { page: { width: 101600, height: 50800 }, margins: { marginType: 'none' } },
+  label2x1: { page: { width: 50800, height: 25400 }, margins: { marginType: 'none' } },
+  a4: { page: { width: 210000, height: 297000 }, margins: { marginType: 'printableArea' } },
+  a5: { page: { width: 148000, height: 210000 }, margins: { marginType: 'printableArea' } },
+};
+const paperOf = (name) => PAPER[name] || PAPER.label4x6;
+const LABEL_PAGE = PAPER.label4x6.page; // kept for the PDF rig
 function renderLabelWindow(html) {
   return new Promise((resolve, reject) => {
     const win = new BrowserWindow({ show: false, width: 400, height: 600, webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true } });
@@ -330,13 +342,14 @@ function renderLabelWindow(html) {
     win.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html));
   });
 }
-async function printLabelHtml(html, { deviceName, copies = 1 } = {}) {
-  if (!deviceName) throw new Error('No label printer chosen — set one in Admin → This device.');
+async function printLabelHtml(html, { deviceName, copies = 1, paper } = {}) {
+  if (!deviceName) throw new Error('No printer chosen — set one in Admin → This device → Printers.');
+  const sheet = paperOf(paper);
   const win = await renderLabelWindow(html);
   try {
     await new Promise((resolve, reject) => {
       win.webContents.print(
-        { silent: true, printBackground: true, deviceName, copies: Math.max(1, Number(copies) || 1), margins: { marginType: 'none' }, pageSize: LABEL_PAGE },
+        { silent: true, printBackground: true, deviceName, copies: Math.max(1, Number(copies) || 1), margins: sheet.margins, pageSize: sheet.page },
         (ok, reason) => (ok ? resolve() : reject(new Error(reason || 'Print failed')))
       );
     });
@@ -354,9 +367,9 @@ async function labelHtmlToPdf(html) {
 }
 ipcMain.handle('siamshop:print-label', async (event, payload) => {
   try {
-    const { html, copies } = payload || {};
+    const { html, copies, paper } = payload || {};
     if (!html) return { ok: false, error: 'Nothing to print' };
-    await printLabelHtml(html, { deviceName: payload?.deviceName || rendererConfig().labelPrinter, copies });
+    await printLabelHtml(html, { deviceName: payload?.deviceName || rendererConfig().labelPrinter, copies, paper });
     return { ok: true };
   } catch (e) {
     console.error('[label] print failed:', e.message);

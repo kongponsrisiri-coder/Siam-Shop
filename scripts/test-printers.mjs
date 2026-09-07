@@ -50,6 +50,16 @@ check('receipt + prep printers created', receiptP?.id && prepP?.id && prepP.job 
 r = await req('POST', '/api/admin/printers', { name: 'Label', kind: 'usb', usb_name: 'Rollo X1040', job: 'label', prep_categories: [1] }, mgrTok);
 check('USB label printer; prep_categories ignored for non-prep jobs', r.status === 201 && r.data.kind === 'usb' && r.data.prep_categories.length === 0, r.data);
 const labelP = r.data;
+// 'label' means anything that is not the 80 mm thermal, so it carries a paper size.
+check('label printer defaults to the 4x6 parcel label', labelP.paper === 'label4x6', labelP.paper);
+r = await req('POST', '/api/admin/printers', { name: 'Office A4', kind: 'usb', usb_name: 'HP LaserJet', job: 'label', paper: 'a4' }, mgrTok);
+check('an A4 printer is a valid "other" printer', r.status === 201 && r.data.paper === 'a4', r.data);
+const a4P = r.data;
+r = await req('PUT', `/api/admin/printers/${a4P.id}`, { paper: 'label2x1' }, mgrTok);
+check('paper size can be changed', r.status === 200 && r.data.paper === 'label2x1', r.data.paper);
+r = await req('PUT', `/api/admin/printers/${a4P.id}`, { paper: 'a3-poster' }, mgrTok);
+check('an unknown paper size falls back to the parcel label rather than erroring', r.status === 200 && r.data.paper === 'label4x6', r.data.paper);
+await req('DELETE', `/api/admin/printers/${a4P.id}`, null, mgrTok);
 r = await req('GET', '/api/printers', null, cashTok);
 check('cashier can read the shop list (3 printers)', r.status === 200 && r.data.printers.length === 3 && r.data.printing_device_id === null, r.data);
 r = await req('POST', `/api/printers/${prepP.id}/test-result`, { ok: true }, cashTok);

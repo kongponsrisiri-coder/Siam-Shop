@@ -446,6 +446,10 @@ async function initDB() {
       )
     `);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_printers_shop ON printers(shop_id, active)`);
+    // A 'label' printer is really "anything that is not the 80 mm thermal at the
+    // till or kitchen" (Korakot, 7 Sep) — parcel labels, shelf labels, A4. It
+    // prints through the OS driver, so it needs a paper size.
+    await pool.query(`ALTER TABLE printers ADD COLUMN IF NOT EXISTS paper VARCHAR(16) NOT NULL DEFAULT 'label4x6'`);
     await pool.query(`
       CREATE TABLE IF NOT EXISTS prep_tickets (
         id               SERIAL PRIMARY KEY,
