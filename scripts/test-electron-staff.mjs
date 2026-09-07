@@ -71,6 +71,7 @@ check('manager can edit products', r.status === 200, r.data);
 console.log('— sale records who rang it');
 const catalogue = (await req('GET', '/api/products')).data;
 const plain = catalogue.find((p) => !p.option_groups?.length && p.track_stock && p.stock_qty > 0);
+if (!plain) { console.error('\n❌ No in-stock plain product — run `npm run seed` (or the M5 suites) against this server first.'); process.exit(1); }
 r = await req('POST', '/api/sales', { items: [{ product_id: plain.id, qty: 1 }], payment_method: 'card' }, dan.token);
 check('cashier sale 201 with staff name + fulfilment', r.status === 201 && r.data.staff === 'Dan Cashier' && r.data.fulfilment === 'takeaway', r.data);
 const det = (await req('GET', `/api/admin/orders/${r.data.id}`, null, owner)).data;
@@ -90,6 +91,27 @@ r = await req('POST', '/api/staff/login', { pin: '4321' });
 check('new PIN signs in', r.status === 200 && r.data.name === 'Dan Cashier');
 r = await req('POST', '/api/staff/login', { pin: '1234' }, null);
 check('customer token rejected on staff routes', (await req('GET', '/api/prep', null, 'not-a-token')).status === 401);
+
+console.log('— cross-shop isolation (needs DATABASE_URL to create a second shop)');
+if (process.env.DATABASE_URL) {
+  const { Pool } = await import('pg');
+  const pool = new Pool({ connectionString: process.env.DATABASE_URL, ssl: /sslmode=disable|localhost/.test(process.env.DATABASE_URL) ? false : { rejectUnauthorized: false } });
+  await pool.query(`INSERT INTO shops (name, slug) VALUES ('Other Test Shop', 'other-test') ON CONFLICT (slug) DO NOTHING`);
+  await pool.end();
+  const fresh = (await req('POST', '/api/staff/login', { pin: '1234' })).data; // manager of demo
+  r = await req('GET', '/api/admin/orders?shop=other-test', null, fresh.token);
+  check('demo manager token on ?shop=other-test → 403', r.status === 403, r.data);
+  r = await req('POST', '/api/sales?shop=other-test', { items: [{ product_id: plain.id, qty: 1 }], payment_method: 'cash' }, fresh.token);
+  check('demo staff cannot ring a sale into another shop → 403', r.status === 403, r.data);
+  r = await req('GET', '/api/admin/orders?shop=demo', null, fresh.token);
+  check('same token on its own shop still works', r.status === 200);
+  r = await req('POST', '/api/staff/login?shop=other-test', { pin: '1234' });
+  check("demo PIN does not sign in to the other shop → 401", r.status === 401, r.data);
+  r = await req('GET', '/api/admin/orders?shop=other-test', null, owner);
+  check('owner password token is not shop-bound (pre-existing, unchanged)', r.status === 200);
+} else {
+  console.log('  ⏭  skipped — set DATABASE_URL to run the second-shop checks');
+}
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

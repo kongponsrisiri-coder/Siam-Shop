@@ -143,7 +143,7 @@ function roleAllows(role, method, path) {
 // Route gate for staff-only endpoints (till, prep, admin). Accepts the owner's
 // password token (role admin) or a staff PIN token (manager | cashier | prep),
 // then applies the role allow-list. Customer tokens are never accepted here.
-function requireAuth(req, res, next) {
+async function requireAuth(req, res, next) {
   const m = /^Bearer\s+(.+)$/i.exec(req.get('authorization') || '');
   const payload = m ? verifyToken(m[1]) : null;
   if (!payload || payload.role === 'customer') {
@@ -152,8 +152,28 @@ function requireAuth(req, res, next) {
   if (!roleAllows(payload.role, req.method, req.path)) {
     return res.status(403).json({ error: 'Your staff role cannot do that — ask a manager.' });
   }
+  // Staff tokens are bound to the shop they signed in to (Krit, PR #1 review):
+  // a cashier token from shop A must not act on shop B by changing ?shop=.
+  // The owner's password token has no shop and keeps today's behaviour.
+  if (payload.shop != null) {
+    try {
+      const shopId = await resolveShopId(req);
+      if (!shopId || Number(shopId) !== Number(payload.shop)) {
+        return res.status(403).json({ error: 'This sign-in belongs to a different shop.' });
+      }
+    } catch (e) {
+      return res.status(500).json({ error: 'Could not verify shop' });
+    }
+  }
   req.auth = payload;
   next();
+}
+
+// Cheap O(1) PIN lookup (Krit, PR #1 review): HMAC(AUTH_SECRET, shop:pin) is
+// stored beside the scrypt hash so sign-in finds one row instead of running
+// scrypt over every staff member; scrypt still verifies the match.
+function pinLookup(shopId, pin) {
+  return crypto.createHmac('sha256', AUTH_SECRET).update(`${shopId}:${pin}`).digest('base64url');
 }
 // Manager/owner only (staff management, settings…). Use after requireAuth.
 function requireManager(req, res, next) {
@@ -703,13 +723,16 @@ app.post('/api/staff/login', pinLimiter, async (req, res) => {
     const pin = String(req.body?.pin || '');
     if (!PIN_RE.test(pin)) return res.status(400).json({ error: 'Enter your 4–6 digit PIN' });
     const { rows } = await pool.query(
-      `SELECT id, name, pin_hash, role FROM staff WHERE shop_id = $1 AND active = TRUE`, [shopId]
+      `SELECT id, name, pin_hash, role FROM staff
+       WHERE shop_id = $1 AND active = TRUE AND (pin_lookup = $2 OR pin_lookup IS NULL)`,
+      [shopId, pinLookup(shopId, pin)]
     );
     const hit = rows.find((s) => verifyPassword(pin, s.pin_hash));
     if (!hit) return res.status(401).json({ error: 'PIN not recognised' });
-    await pool.query(`UPDATE staff SET last_login_at = NOW() WHERE id = $1`, [hit.id]);
+    await pool.query(`UPDATE staff SET last_login_at = NOW(), pin_lookup = COALESCE(pin_lookup, $2) WHERE id = $1`, [hit.id, pinLookup(shopId, pin)]);
     const exp = Date.now() + TOKEN_TTL_MS;
-    const token = signToken({ role: hit.role, name: hit.name, sid: hit.id, exp });
+    // shop is bound into the token — requireAuth rejects use against another shop.
+    const token = signToken({ role: hit.role, name: hit.name, sid: hit.id, shop: shopId, exp });
     res.json({ token, role: hit.role, name: hit.name, sid: hit.id, expiresAt: exp });
   } catch (err) {
     console.error('[staff/login]', err.message);
@@ -737,8 +760,11 @@ app.get('/api/admin/staff', requireAuth, requireManager, async (req, res) => {
 // A PIN must be unique within the shop — otherwise the pad can't tell two
 // people apart. Compares against every active hash (small list).
 async function pinTaken(shopId, pin, exceptId = null) {
-  const { rows } = await pool.query(`SELECT id, pin_hash FROM staff WHERE shop_id = $1 AND active = TRUE`, [shopId]);
-  return rows.some((s) => s.id !== exceptId && verifyPassword(pin, s.pin_hash));
+  const { rows } = await pool.query(
+    `SELECT id, pin_hash, pin_lookup FROM staff WHERE shop_id = $1 AND (pin_lookup = $2 OR pin_lookup IS NULL)`,
+    [shopId, pinLookup(shopId, pin)]
+  );
+  return rows.some((s) => s.id !== exceptId && (s.pin_lookup ? true : verifyPassword(pin, s.pin_hash)));
 }
 app.post('/api/admin/staff', requireAuth, requireManager, async (req, res) => {
   try {
@@ -751,11 +777,12 @@ app.post('/api/admin/staff', requireAuth, requireManager, async (req, res) => {
     if (!PIN_RE.test(pin)) return res.status(400).json({ error: 'PIN must be 4–6 digits' });
     if (await pinTaken(shopId, pin)) return res.status(409).json({ error: 'That PIN is already in use — choose another' });
     const { rows } = await pool.query(
-      `INSERT INTO staff (shop_id, name, pin_hash, role) VALUES ($1,$2,$3,$4) RETURNING id, name, role, active, created_at`,
-      [shopId, name, hashPassword(pin), role]
+      `INSERT INTO staff (shop_id, name, pin_hash, pin_lookup, role) VALUES ($1,$2,$3,$4,$5) RETURNING id, name, role, active, created_at`,
+      [shopId, name, hashPassword(pin), pinLookup(shopId, pin), role]
     );
     res.status(201).json(rows[0]);
   } catch (err) {
+    if (err.code === '23505') return res.status(409).json({ error: 'That PIN is already in use — choose another' });
     console.error('[admin/staff POST]', err.message);
     res.status(500).json({ error: 'Failed to add staff' });
   }
@@ -772,14 +799,15 @@ app.put('/api/admin/staff/:id', requireAuth, requireManager, async (req, res) =>
     }
     const { rows } = await pool.query(
       `UPDATE staff SET name = COALESCE($3, name), role = COALESCE($4, role), active = COALESCE($5, active),
-              pin_hash = COALESCE($6, pin_hash)
+              pin_hash = COALESCE($6, pin_hash), pin_lookup = COALESCE($7, pin_lookup)
        WHERE id = $1 AND shop_id = $2 RETURNING id, name, role, active, created_at, last_login_at`,
       [id, shopId, name != null ? String(name).trim() : null, STAFF_ROLES.includes(role) ? role : null,
-       active != null ? Boolean(active) : null, pin ? hashPassword(String(pin)) : null]
+       active != null ? Boolean(active) : null, pin ? hashPassword(String(pin)) : null, pin ? pinLookup(shopId, String(pin)) : null]
     );
     if (!rows[0]) return res.status(404).json({ error: 'Staff member not found' });
     res.json(rows[0]);
   } catch (err) {
+    if (err.code === '23505') return res.status(409).json({ error: 'That PIN is already in use — choose another' });
     console.error('[admin/staff PUT]', err.message);
     res.status(500).json({ error: 'Failed to update staff' });
   }

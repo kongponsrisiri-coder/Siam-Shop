@@ -277,6 +277,9 @@ async function initDB() {
       )
     `);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_staff_shop ON staff(shop_id, active)`);
+    // O(1) PIN lookup: HMAC(AUTH_SECRET, shop:pin). Unique per shop = PIN uniqueness at the DB level.
+    await pool.query(`ALTER TABLE staff ADD COLUMN IF NOT EXISTS pin_lookup TEXT`);
+    await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_staff_pin_lookup ON staff(shop_id, pin_lookup) WHERE pin_lookup IS NOT NULL`);
 
     // Helpful indexes for the hot paths.
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_products_shop ON products(shop_id, is_active)`);
