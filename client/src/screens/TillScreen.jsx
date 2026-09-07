@@ -5,6 +5,7 @@ import { Logo } from '../components/Logo.jsx';
 import OptionPicker from '../components/OptionPicker.jsx';
 import StaffGate, { StaffChip } from '../components/StaffGate.jsx';
 import PostalOrders from '../components/PostalOrders.jsx';
+import { OpenTillModal, CloseTillModal } from '../components/TillSession.jsx';
 import { isElectron, electronConfig, desktop } from '../electron.js';
 import { describeSelection, hasOptions, lineKey, unitPrice } from '../options.js';
 
@@ -30,6 +31,16 @@ export default function TillScreen() {
   const [basket, setBasket] = useState([]);
   const [picking, setPicking] = useState(null); // product awaiting option choice
   const [postOpen, setPostOpen] = useState(false); // 📦 postal orders (SIAMSHOP-POST-001)
+  // Till session (SIAMSHOP-TILL-001): null = unknown, {session:null} = none open
+  const [till, setTill] = useState(null);
+  const [tillModal, setTillModal] = useState(null); // 'open' | 'close' | null
+  async function loadTill() {
+    try {
+      const t = await api.tillSession();
+      setTill(t);
+      if (!t.session) setTillModal((m) => (m === 'dismissed' ? m : 'open'));
+    } catch { /* ignore */ }
+  }
   const [search, setSearch] = useState('');
   const [payment, setPayment] = useState('cash');
   const [fulfilment, setFulfilment] = useState('takeaway'); // takeaway | dine_in (SIAMSHOP-504)
@@ -72,6 +83,7 @@ export default function TillScreen() {
     if (authed) {
       loadCatalogue();
       loadSummary();
+      loadTill();
     }
   }, [authed]);
 
@@ -190,7 +202,7 @@ export default function TillScreen() {
         if (pr.kickDrawerOnCash !== false && sale.payment_method === 'cash') desktop.kickDrawer().catch(() => {});
         if (pr.autoPrint !== false) printReceipt(sale);
       }
-      await Promise.all([loadCatalogue(), loadSummary()]);
+      await Promise.all([loadCatalogue(), loadSummary(), loadTill()]);
       scanRef.current?.focus();
     } catch (err) {
       showFlash('err', err.message);
@@ -233,7 +245,14 @@ export default function TillScreen() {
             Today: <strong>{money(summary.totals.gross)}</strong> · {summary.totals.order_count} sales
           </div>
         )}
-        <button className="btn secondary" style={{ marginLeft: 12 }} onClick={() => setPostOpen(true)}>📦 Post</button>
+        {till && (till.session ? (
+          <button className="btn secondary" style={{ marginLeft: 12 }} onClick={() => setTillModal('close')} title={`Open since ${new Date(till.session.opened_at).toLocaleTimeString()} · float £${Number(till.session.float_amount).toFixed(2)}`}>
+            🧮 Close till
+          </button>
+        ) : (
+          <button className="btn" style={{ marginLeft: 12 }} onClick={() => setTillModal('open')}>🔓 Open till</button>
+        ))}
+        <button className="btn secondary" style={{ marginLeft: 8 }} onClick={() => setPostOpen(true)}>📦 Post</button>
         <Link to="/admin" className="btn secondary" style={{ marginLeft: 8 }}>Admin</Link>
       </div>
 
@@ -375,6 +394,10 @@ export default function TillScreen() {
       )}
 
       {postOpen && <PostalOrders onClose={() => setPostOpen(false)} />}
+      {tillModal === 'open' && <OpenTillModal onOpened={(t) => { setTill(t); setTillModal(null); showFlash('ok', 'Till open'); }} onClose={() => setTillModal('dismissed')} />}
+      {tillModal === 'close' && till?.session && (
+        <CloseTillModal summary={till.summary} onClose={() => setTillModal(null)} onClosed={() => { setTillModal(null); setTill({ session: null }); loadSummary(); }} />
+      )}
 
       {/* Receipt modal */}
       {receipt && (

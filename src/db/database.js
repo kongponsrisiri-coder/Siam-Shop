@@ -284,6 +284,32 @@ async function initDB() {
     // SIAMSHOP-POST-001 — parcel label printed (postal orders).
     await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS label_printed_at TIMESTAMPTZ`);
 
+    // SIAMSHOP-TILL-001 — till sessions (shift open → cash-up → Z report).
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS till_sessions (
+        id             SERIAL PRIMARY KEY,
+        shop_id        INTEGER NOT NULL REFERENCES shops(id) ON DELETE CASCADE,
+        status         VARCHAR(10) NOT NULL DEFAULT 'open',   -- open | closed
+        opened_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        opened_by      VARCHAR(120),
+        opened_by_sid  INTEGER,
+        float_amount   NUMERIC(10,2) NOT NULL DEFAULT 0,
+        closed_at      TIMESTAMPTZ,
+        closed_by      VARCHAR(120),
+        closed_by_sid  INTEGER,
+        expected_cash  NUMERIC(10,2),
+        counted_cash   NUMERIC(10,2),
+        variance       NUMERIC(10,2),
+        notes          TEXT,
+        summary        JSONB                                   -- Z report snapshot at close
+      )
+    `);
+    await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_till_sessions_open ON till_sessions(shop_id) WHERE status = 'open'`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_till_sessions_shop ON till_sessions(shop_id, opened_at DESC)`);
+    await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS session_id INTEGER REFERENCES till_sessions(id) ON DELETE SET NULL`);
+    await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS refunded_at TIMESTAMPTZ`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_orders_session ON orders(session_id)`);
+
     // Helpful indexes for the hot paths.
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_products_shop ON products(shop_id, is_active)`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_orders_shop ON orders(shop_id, created_at DESC)`);

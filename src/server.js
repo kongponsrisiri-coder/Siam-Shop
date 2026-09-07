@@ -128,6 +128,7 @@ const ROLE_ALLOW = {
     ['GET', /^\/api\/admin\/me$/], ['GET', /^\/api\/admin\/products$/], ['GET', /^\/api\/admin\/orders(\/|$)/],
     ['*', /^\/api\/sales(\/|$)/], ['*', /^\/api\/prep(\/|$)/], ['GET', /^\/api\/products\/lookup$/],
     ['*', /^\/api\/stock\/(receive|stocktake|goods-in-batch|scan-invoice|movements)$/], ['GET', /^\/api\/staff\/me$/],
+    ['*', /^\/api\/till\/(\/|$)/], ['*', /^\/api\/till\/session(\/|$)/], ['GET', /^\/api\/till\/sessions(\/|$)/],
     ['POST', /^\/api\/admin\/orders\/\d+\/(ready|collected|dispatch|label-printed)$/],
   ],
   prep: [
@@ -1829,12 +1830,17 @@ app.post('/api/sales', requireAuth, async (req, res) => {
       change = +(tendered - total).toFixed(2);
     }
 
+    // Stamp the open till session (SIAMSHOP-TILL-001) so the Z can reconcile the drawer.
+    const { rows: sess } = await client.query(
+      `SELECT id FROM till_sessions WHERE shop_id = $1 AND status = 'open' ORDER BY opened_at DESC LIMIT 1`, [shopId]
+    );
+    const sessionId = sess[0]?.id || null;
     const orderRes = await client.query(
       `INSERT INTO orders (shop_id, channel, status, subtotal, total, payment_method,
-                           amount_tendered, change_given, staff, payment_status, fulfilled_at, fulfilment)
-       VALUES ($1,'instore','completed',$2,$3,$4,$5,$6,$7,'paid',NOW(),$8)
+                           amount_tendered, change_given, staff, payment_status, fulfilled_at, fulfilment, session_id)
+       VALUES ($1,'instore','completed',$2,$3,$4,$5,$6,$7,'paid',NOW(),$8,$9)
        RETURNING id, created_at`,
-      [shopId, subtotal, total, paymentMethod, tendered, change, staff, fulfilment]
+      [shopId, subtotal, total, paymentMethod, tendered, change, staff, fulfilment, sessionId]
     );
     const orderId = orderRes.rows[0].id;
 
@@ -1867,6 +1873,7 @@ app.post('/api/sales', requireAuth, async (req, res) => {
       payment_method: paymentMethod,
       fulfilment,
       staff,
+      session_id: sessionId,
       amount_tendered: tendered,
       change_given: change,
       created_at: orderRes.rows[0].created_at,
@@ -2364,7 +2371,7 @@ app.post('/api/admin/orders/:id/cancel', requireAuth, async (req, res) => {
           [shopId, it.product_id, it.qty, order.id, req.auth?.name || 'admin']
         );
       }
-      await client.query(`UPDATE orders SET payment_status = 'refunded' WHERE id = $1`, [order.id]);
+      await client.query(`UPDATE orders SET payment_status = 'refunded', refunded_at = NOW() WHERE id = $1`, [order.id]);
     }
     const { rows: updated } = await client.query(
       `UPDATE orders SET status = 'cancelled' WHERE id = $1 RETURNING *`, [order.id]
@@ -2471,6 +2478,154 @@ app.post('/api/admin/orders/:id/collected', requireAuth, async (req, res) => {
   } catch (err) {
     console.error('[admin/orders collected]', err.message);
     res.status(500).json({ error: 'Failed to mark collected' });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Till sessions + Z report (SIAMSHOP-TILL-001). One open session per shop
+// (partial unique index). Cashiers open with a float; a manager closes with the
+// counted cash; the Z snapshot is stored on the session and reprintable.
+// ---------------------------------------------------------------------------
+async function sessionSummary(shopId, session) {
+  const from = session.opened_at;
+  const to = session.closed_at || new Date();
+  const win = [shopId, from, to]; // window queries must not carry unused params (pg can't type them)
+  // GROSS = everything rung in this session, including sales refunded later
+  // (a refund is its own line below) — so drawer cash = float + cash rung − cash refunded.
+  const sales = (await pool.query(
+    `SELECT COALESCE(payment_method,'other') AS method, COUNT(*)::int AS count, COALESCE(SUM(total),0)::numeric AS gross
+     FROM orders WHERE shop_id = $1 AND channel = 'instore' AND session_id = $2 AND payment_status IN ('paid','refunded')
+     GROUP BY payment_method`, [shopId, session.id]
+  )).rows;
+  // Refunds are counted when they HAPPEN (refunded_at inside the shift), whatever session sold the item.
+  const refunds = (await pool.query(
+    `SELECT COALESCE(payment_method,'other') AS method, COUNT(*)::int AS count, COALESCE(SUM(total),0)::numeric AS total
+     FROM orders WHERE shop_id = $1 AND channel = 'instore' AND payment_status = 'refunded'
+       AND refunded_at >= $2 AND refunded_at <= $3 GROUP BY payment_method`, win
+  )).rows;
+  const items = (await pool.query(
+    `SELECT COALESCE(SUM(oi.qty),0)::int AS qty FROM order_items oi JOIN orders o ON o.id = oi.order_id
+     WHERE o.shop_id = $1 AND o.session_id = $2 AND o.payment_status IN ('paid','refunded')`, [shopId, session.id]
+  )).rows[0];
+  const online = (await pool.query(
+    `SELECT COUNT(*)::int AS count, COALESCE(SUM(total),0)::numeric AS gross FROM orders
+     WHERE shop_id = $1 AND channel <> 'instore' AND payment_status = 'paid' AND created_at >= $2 AND created_at <= $3`, win
+  )).rows[0];
+  const by = (rows, m) => rows.find((r) => r.method === m) || { count: 0, gross: 0, total: 0 };
+  const cashSales = Number(by(sales, 'cash').gross), cardSales = Number(by(sales, 'card').gross);
+  const cashRefunds = Number(by(refunds, 'cash').total), cardRefunds = Number(by(refunds, 'card').total);
+  const gross = sales.reduce((a, r) => a + Number(r.gross), 0);
+  const refundTotal = refunds.reduce((a, r) => a + Number(r.total), 0);
+  const expectedCash = +(Number(session.float_amount) + cashSales - cashRefunds).toFixed(2);
+  return {
+    session_id: session.id, opened_at: from, closed_at: session.closed_at || null,
+    opened_by: session.opened_by, closed_by: session.closed_by,
+    float_amount: Number(session.float_amount),
+    sales: { count: sales.reduce((a, r) => a + r.count, 0), gross: +gross.toFixed(2), cash: +cashSales.toFixed(2), card: +cardSales.toFixed(2), items: items.qty },
+    refunds: { count: refunds.reduce((a, r) => a + r.count, 0), total: +refundTotal.toFixed(2), cash: +cashRefunds.toFixed(2), card: +cardRefunds.toFixed(2) },
+    discounts: { count: 0, total: 0 }, // SIAMSHOP-DISCOUNT-001 fills this in
+    net: +(gross - refundTotal).toFixed(2),
+    online: { count: online.count, gross: Number(online.gross) },
+    expected_cash: expectedCash,
+    counted_cash: session.counted_cash != null ? Number(session.counted_cash) : null,
+    variance: session.variance != null ? Number(session.variance) : null,
+    notes: session.notes || '',
+  };
+}
+async function openSession(shopId) {
+  const { rows } = await pool.query(
+    `SELECT * FROM till_sessions WHERE shop_id = $1 AND status = 'open' ORDER BY opened_at DESC LIMIT 1`, [shopId]
+  );
+  return rows[0] || null;
+}
+// Current open session (+ live summary) or { session: null }.
+app.get('/api/till/session', requireAuth, async (req, res) => {
+  try {
+    const shopId = await resolveShopId(req);
+    if (!shopId) return res.status(404).json({ error: 'Shop not found' });
+    const s = await openSession(shopId);
+    if (!s) return res.json({ session: null });
+    res.json({ session: s, summary: await sessionSummary(shopId, s) });
+  } catch (err) {
+    console.error('[till/session]', err.message);
+    res.status(500).json({ error: 'Failed to load till session' });
+  }
+});
+app.post('/api/till/session/open', requireAuth, async (req, res) => {
+  try {
+    const shopId = await resolveShopId(req);
+    if (!shopId) return res.status(404).json({ error: 'Shop not found' });
+    const float = Number(req.body?.float_amount);
+    if (!Number.isFinite(float) || float < 0 || float > 100000) return res.status(400).json({ error: 'Enter the opening float (£)' });
+    const existing = await openSession(shopId);
+    if (existing) return res.status(409).json({ error: 'The till is already open', session: existing });
+    const { rows } = await pool.query(
+      `INSERT INTO till_sessions (shop_id, opened_by, opened_by_sid, float_amount) VALUES ($1,$2,$3,$4) RETURNING *`,
+      [shopId, req.auth?.name || 'Owner', req.auth?.sid || null, +float.toFixed(2)]
+    );
+    res.status(201).json({ session: rows[0], summary: await sessionSummary(shopId, rows[0]) });
+  } catch (err) {
+    if (err.code === '23505') { const ex = await openSession(await resolveShopId(req)); return res.status(409).json({ error: 'The till is already open', session: ex }); }
+    console.error('[till/session open]', err.message);
+    res.status(500).json({ error: 'Failed to open the till' });
+  }
+});
+// Close = cash-up. Manager or owner only. Snapshots the Z onto the session.
+app.post('/api/till/session/close', requireAuth, requireManager, async (req, res) => {
+  try {
+    const shopId = await resolveShopId(req);
+    if (!shopId) return res.status(404).json({ error: 'Shop not found' });
+    const counted = Number(req.body?.counted_cash);
+    if (!Number.isFinite(counted) || counted < 0) return res.status(400).json({ error: 'Enter the cash counted in the drawer (£)' });
+    const s = await openSession(shopId);
+    if (!s) return res.status(409).json({ error: 'No till session is open' });
+    const closing = { ...s, closed_at: new Date(), closed_by: req.auth?.name || 'Owner', counted_cash: counted };
+    const summary = await sessionSummary(shopId, closing);
+    summary.counted_cash = +counted.toFixed(2);
+    summary.variance = +(counted - summary.expected_cash).toFixed(2);
+    summary.notes = String(req.body?.notes || '').slice(0, 500);
+    const { rows } = await pool.query(
+      `UPDATE till_sessions SET status = 'closed', closed_at = $3, closed_by = $4, closed_by_sid = $5,
+              expected_cash = $6, counted_cash = $7, variance = $8, notes = $9, summary = $10
+       WHERE id = $1 AND shop_id = $2 AND status = 'open' RETURNING *`,
+      [s.id, shopId, closing.closed_at, closing.closed_by, req.auth?.sid || null,
+       summary.expected_cash, summary.counted_cash, summary.variance, summary.notes, JSON.stringify(summary)]
+    );
+    if (!rows[0]) return res.status(409).json({ error: 'Session was already closed' });
+    res.json({ session: rows[0], summary });
+  } catch (err) {
+    console.error('[till/session close]', err.message);
+    res.status(500).json({ error: 'Failed to close the till' });
+  }
+});
+// Z report history (Admin → Reports). Managers/owner; cashiers may read too.
+app.get('/api/till/sessions', requireAuth, async (req, res) => {
+  try {
+    const shopId = await resolveShopId(req);
+    if (!shopId) return res.status(404).json({ error: 'Shop not found' });
+    const { rows } = await pool.query(
+      `SELECT id, status, opened_at, opened_by, float_amount, closed_at, closed_by, expected_cash, counted_cash, variance, notes,
+              (summary->'sales'->>'gross')::numeric AS gross, (summary->'sales'->>'count')::int AS sales_count
+       FROM till_sessions WHERE shop_id = $1 ORDER BY opened_at DESC LIMIT 60`, [shopId]
+    );
+    res.json(rows);
+  } catch (err) {
+    console.error('[till/sessions]', err.message);
+    res.status(500).json({ error: 'Failed to load Z reports' });
+  }
+});
+app.get('/api/till/sessions/:id', requireAuth, async (req, res) => {
+  try {
+    const shopId = await resolveShopId(req);
+    if (!shopId) return res.status(404).json({ error: 'Shop not found' });
+    const { rows } = await pool.query(`SELECT * FROM till_sessions WHERE id = $1 AND shop_id = $2`, [req.params.id, shopId]);
+    const s = rows[0];
+    if (!s) return res.status(404).json({ error: 'Session not found' });
+    const summary = s.status === 'closed' && s.summary ? s.summary : await sessionSummary(shopId, s);
+    res.json({ session: s, summary });
+  } catch (err) {
+    console.error('[till/sessions/:id]', err.message);
+    res.status(500).json({ error: 'Failed to load Z report' });
   }
 });
 

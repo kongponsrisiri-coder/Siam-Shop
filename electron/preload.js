@@ -22,6 +22,7 @@ contextBridge.exposeInMainWorld('electron', {
   // Printing runs in the MAIN process (Path A has no local server).
   printReceipt: (payload) => ipcRenderer.invoke('siamshop:print-receipt', payload),
   kickDrawer: () => ipcRenderer.invoke('siamshop:kick-drawer'),
+  printZ: (payload) => ipcRenderer.invoke('siamshop:print-z', payload),
   testPrint: (printer) => ipcRenderer.invoke('siamshop:test-print', printer),
   listPrinters: () => ipcRenderer.invoke('siamshop:list-printers'),
   // Parcel label (SIAMSHOP-POST-001): rendered HTML → hidden window → OS driver at 4×6 in.
