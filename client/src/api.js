@@ -177,6 +177,9 @@ export const api = {
   // SIAMSHOP-504 — Click & Collect lifecycle
   adminMarkReady: (id) => request(`/api/admin/orders/${id}/ready`, { method: 'POST', authed: true }),
   adminMarkCollected: (id) => request(`/api/admin/orders/${id}/collected`, { method: 'POST', authed: true }),
+  // SIAMSHOP-POST-001 — parcel label data + printed stamp
+  adminOrderLabel: (id) => request(`/api/admin/orders/${id}/label`, { authed: true }),
+  adminLabelPrinted: (id) => request(`/api/admin/orders/${id}/label-printed`, { method: 'POST', authed: true }),
   // SIAMSHOP-505 — counter prep screen
   prepList: () => request('/api/prep', { authed: true }),
   prepStatus: (id, prep_status) =>

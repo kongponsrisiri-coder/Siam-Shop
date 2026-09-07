@@ -72,6 +72,7 @@ function rendererConfig(cfg) {
     shopName: c.shop_name || '',
     cloudApiUrl: c.cloud_api_url || '',
     shopSlug: c.shop_slug || '',
+    labelPrinter: c.label_printer || '',
     printer: {
       ip: c.printer?.ip || '', port: Number(c.printer?.port) || 9100, name: c.printer?.name || '',
       lprQueue: c.printer?.lprQueue || 'lp',
@@ -119,6 +120,7 @@ ipcMain.handle('siamshop:save-config', async (event, patch) => {
     if (patch.shop_name != null) next.shop_name = String(patch.shop_name).trim();
     if (patch.cloud_api_url != null) next.cloud_api_url = String(patch.cloud_api_url).trim().replace(/\/$/, '');
     if (patch.shop_slug != null) next.shop_slug = String(patch.shop_slug).trim();
+    if (patch.label_printer != null) next.label_printer = String(patch.label_printer).trim();
     if (patch.printer) {
       next.printer = {
         ...(cur.printer || {}),
@@ -180,6 +182,54 @@ ipcMain.handle('siamshop:list-printers', async () => {
     return printers.map((p) => ({ name: p.name, displayName: p.displayName || p.name, isDefault: !!p.isDefault }));
   } catch (e) {
     return [];
+  }
+});
+
+// ── Parcel labels (SIAMSHOP-POST-001) ───────────────────────────────────────
+// Label printers speak ZPL/TSPL/raster per brand, so the label goes through
+// the OS DRIVER: render the HTML in a hidden window and print silently at
+// 4×6 in (101600 × 152400 µm) to the configured label printer. Not ESC/POS.
+const LABEL_PAGE = { width: 101600, height: 152400 };
+function renderLabelWindow(html) {
+  return new Promise((resolve, reject) => {
+    const win = new BrowserWindow({ show: false, width: 400, height: 600, webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true } });
+    const timer = setTimeout(() => { try { win.close(); } catch (_) {} reject(new Error('Label render timed out')); }, 15000);
+    win.webContents.once('did-finish-load', () => setTimeout(() => { clearTimeout(timer); resolve(win); }, 250));
+    win.webContents.once('did-fail-load', (e, code, desc) => { clearTimeout(timer); try { win.close(); } catch (_) {} reject(new Error(`Label failed to render: ${desc}`)); });
+    win.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html));
+  });
+}
+async function printLabelHtml(html, { deviceName, copies = 1 } = {}) {
+  if (!deviceName) throw new Error('No label printer chosen — set one in Admin → This device.');
+  const win = await renderLabelWindow(html);
+  try {
+    await new Promise((resolve, reject) => {
+      win.webContents.print(
+        { silent: true, printBackground: true, deviceName, copies: Math.max(1, Number(copies) || 1), margins: { marginType: 'none' }, pageSize: LABEL_PAGE },
+        (ok, reason) => (ok ? resolve() : reject(new Error(reason || 'Print failed')))
+      );
+    });
+  } finally {
+    try { win.close(); } catch (_) {}
+  }
+}
+async function labelHtmlToPdf(html) {
+  const win = await renderLabelWindow(html);
+  try {
+    return await win.webContents.printToPDF({ printBackground: true, margins: { marginType: 'none' }, pageSize: { width: 4, height: 6 } });
+  } finally {
+    try { win.close(); } catch (_) {}
+  }
+}
+ipcMain.handle('siamshop:print-label', async (event, payload) => {
+  try {
+    const { html, copies } = payload || {};
+    if (!html) return { ok: false, error: 'Nothing to print' };
+    await printLabelHtml(html, { deviceName: rendererConfig().labelPrinter, copies });
+    return { ok: true };
+  } catch (e) {
+    console.error('[label] print failed:', e.message);
+    return { ok: false, error: e.message };
   }
 });
 
@@ -451,6 +501,18 @@ app.whenReady().then(async () => {
   }
   if (justSetUp && app.isPackaged && (process.platform === 'darwin' || process.platform === 'win32')) {
     try { app.setLoginItemSettings({ openAtLogin: true, openAsHidden: false }); } catch (err) { console.warn('[setup] login-item failed:', err.message); }
+  }
+
+  // Dev-only rig (SIAMSHOP-POST-001): SIAMSHOP_LABEL_HTML=<file> SIAMSHOP_LABEL_PDF=<out.pdf>
+  // renders the label through the same hidden-window path and writes a PDF, then quits.
+  if (!app.isPackaged && process.env.SIAMSHOP_LABEL_HTML && process.env.SIAMSHOP_LABEL_PDF) {
+    try {
+      const pdf = await labelHtmlToPdf(fs.readFileSync(process.env.SIAMSHOP_LABEL_HTML, 'utf8'));
+      fs.writeFileSync(process.env.SIAMSHOP_LABEL_PDF, pdf);
+      console.log('[label-rig] pdf written:', process.env.SIAMSHOP_LABEL_PDF, pdf.length, 'bytes');
+    } catch (e) { console.error('[label-rig] failed:', e.message); }
+    app.exit(0);
+    return;
   }
 
   createWindow();
