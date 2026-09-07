@@ -77,25 +77,36 @@ jobs:
         with:
           p12-file-base64: ${{ secrets.MAC_CERT_P12_BASE64 }}
           p12-password:    ${{ secrets.MAC_CERT_PASSWORD }}
+      # ONE electron-builder invocation signs + notarizes + staples. The env block
+      # below MUST stay attached to this step (v0.1.7 shipped unnotarized because a
+      # step was inserted between `run:` and `env:` — the credentials moved with it).
       - name: Build Mac DMG + ZIP
         run: cd electron && npm run build:mac
-      # HOTFIX v0.1.7 — the PACKAGED app must contain every main-process module and
-      # launch. v0.1.5/v0.1.6 shipped without raster.js/printerScan.js and died on
-      # start; the renderer smoke cannot see that.
-      - name: Packaged-app check (asar modules + --self-test launch)
-        run: |
-          ASAR=$(find electron/dist-electron -type f -name app.asar -path '*SiamShop.app*' | head -1)
-          echo "asar: $ASAR"; test -n "$ASAR"
-          node scripts/check-asar.mjs "$ASAR"
-          BIN=$(find electron/dist-electron -type f -name SiamShop -path '*Contents/MacOS/*' | head -1)
-          echo "binary: $BIN"; test -n "$BIN"
-          OUT=$("$BIN" --self-test 2>&1 | tee /dev/stderr) ; echo "$OUT" | grep -q "SELFTEST OK"
         env:
           CSC_LINK:                    ${{ secrets.MAC_CERT_P12_BASE64 }}
           CSC_KEY_PASSWORD:            ${{ secrets.MAC_CERT_PASSWORD }}
           APPLE_ID:                    ${{ secrets.MAC_APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.MAC_APPLE_APP_PASSWORD }}
           APPLE_TEAM_ID:               ${{ secrets.MAC_TEAM_ID }}
+      # HOTFIX v0.1.7 — the PACKAGED app must contain every main-process module and
+      # launch. v0.1.5/v0.1.6 shipped without raster.js/printerScan.js and died on
+      # start; the renderer smoke cannot see that. v0.1.8 adds the notarization gate.
+      - name: Packaged-app check (asar modules + --self-test launch + notarization)
+        run: |
+          APP=$(find electron/dist-electron -type d -name SiamShop.app | head -1)
+          echo "app: $APP"; test -n "$APP"
+          ASAR="$APP/Contents/Resources/app.asar"; test -f "$ASAR"
+          node scripts/check-asar.mjs "$ASAR"
+          BIN="$APP/Contents/MacOS/SiamShop"; test -x "$BIN"
+          OUT=$("$BIN" --self-test 2>&1 | tee /dev/stderr) ; echo "$OUT" | grep -q "SELFTEST OK"
+          if [ "$HAS_MAC_CERT" = "true" ]; then
+            echo "— notarization gate"
+            xcrun stapler validate "$APP"
+            spctl -a -vv -t exec "$APP" 2>&1 | tee /dev/stderr | grep -q "source=Notarized Developer ID"
+            for f in electron/dist-electron/*.dmg; do xcrun stapler validate "$f"; done
+          else
+            echo "no signing cert in this repo — notarization gate skipped"
+          fi
       - name: Show build output
         run: ls -la electron/dist-electron
       - name: Upload Mac installer + update manifest
