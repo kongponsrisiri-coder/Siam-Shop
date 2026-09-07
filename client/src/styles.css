@@ -536,3 +536,6 @@ th { color: var(--muted); font-weight: 600; }
 .staff-chip small { opacity: 0.8; }
 .staff-chip .till-x { color: var(--navy); font-size: 15px; }
 .desktop-note { font-size: 12px; color: var(--muted); }
+
+/* ---- Clock in/out (SIAMSHOP-CLOCK-001) ---- */
+.clock-done { padding: 18px 0 8px; text-align: center; }

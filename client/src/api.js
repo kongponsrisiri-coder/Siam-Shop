@@ -101,6 +101,10 @@ export const api = {
   adminCreateStaff: (s) => request('/api/admin/staff', { method: 'POST', body: s, authed: true }),
   adminUpdateStaff: (id, s) => request(`/api/admin/staff/${id}`, { method: 'PUT', body: s, authed: true }),
   adminDeleteStaff: (id) => request(`/api/admin/staff/${id}`, { method: 'DELETE', authed: true }),
+  // Clock in/out + timesheets (SIAMSHOP-CLOCK-001)
+  clockToggle: (pin) => request('/api/clock/toggle', { method: 'POST', body: { pin } }),
+  clockStatus: () => request('/api/clock/status', { authed: true }),
+  clockRecords: (from, to) => request(`/api/clock/records?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`, { authed: true }),
 
   // Admin products
   adminListProducts: () => request('/api/admin/products', { authed: true }),
