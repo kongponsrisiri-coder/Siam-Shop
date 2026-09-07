@@ -135,6 +135,7 @@ function AccountView({ profile, onProfile, onSignOut }) {
   const [name, setName] = useState(profile.name || '');
   const [phone, setPhone] = useState(profile.phone || '');
   const [consent, setConsent] = useState(!!profile.marketing_consent);
+  const [birthday, setBirthday] = useState(profile.birthday || ''); // MM-DD (SIAMSHOP-CRM-001)
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState('');
@@ -159,6 +160,8 @@ function AccountView({ profile, onProfile, onSignOut }) {
         name: name.trim(),
         phone: phone.trim(),
         marketing_consent: consent,
+        // complete MM-DD saves, '' clears, a half-picked date leaves it unchanged
+        birthday: /^(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/.test(birthday) ? birthday : birthday === '' ? '' : undefined,
       });
       onProfile(updated);
       setSaved(true);
@@ -186,6 +189,15 @@ function AccountView({ profile, onProfile, onSignOut }) {
           <input value={name} onChange={(e) => setName(e.target.value)} />
           <label>Phone</label>
           <input value={phone} onChange={(e) => setPhone(e.target.value)} />
+          <label>Birthday (optional — day and month only)</label>
+          <div className="row" style={{ gap: 8 }}>
+            <select value={birthday ? Number(birthday.split('-')[1]) : 0} onChange={(e) => { const d = Number(e.target.value); const m = birthday ? Number(birthday.split('-')[0]) : 0; setBirthday(d && m ? `${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}` : d ? `00-${String(d).padStart(2, '0')}` : ''); }}>
+              <option value={0}>Day</option>{Array.from({ length: 31 }, (_, i) => <option key={i + 1} value={i + 1}>{i + 1}</option>)}
+            </select>
+            <select value={birthday ? Number(birthday.split('-')[0]) : 0} onChange={(e) => { const m = Number(e.target.value); const d = birthday ? Number(birthday.split('-')[1]) : 0; setBirthday(d && m ? `${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}` : m ? `${String(m).padStart(2, '0')}-00` : ''); }}>
+              <option value={0}>Month</option>{['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'].map((mo, i) => <option key={mo} value={i + 1}>{mo}</option>)}
+            </select>
+          </div>
           <label className="row" style={{ marginTop: 12, gap: 8 }}>
             <input
               type="checkbox"

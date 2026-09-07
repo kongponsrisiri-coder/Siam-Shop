@@ -65,6 +65,16 @@ export default function TillScreen() {
   const [shopSettings, setShopSettings] = useState(null);
   useEffect(() => { if (authed) api.getSettings().then(setShopSettings).catch(() => {}); }, [authed]);
   const [voiding, setVoiding] = useState(null); // basket line awaiting a void reason (SIAMSHOP-REFUND-001)
+  // Attach the sale to a customer (SIAMSHOP-CRM-001): phone / email / name lookup.
+  const [customer, setCustomer] = useState(null); // { id, name, email, phone }
+  const [custQ, setCustQ] = useState('');
+  const [custHits, setCustHits] = useState([]);
+  const [custAdd, setCustAdd] = useState(null); // { name, phone, email } quick-add form
+  useEffect(() => {
+    if (custQ.trim().length < 2 || customer) { setCustHits([]); return undefined; }
+    const t = setTimeout(() => { api.tillFindCustomers(custQ.trim()).then(setCustHits).catch(() => setCustHits([])); }, 250);
+    return () => clearTimeout(t);
+  }, [custQ, customer]);
   const scanRef = useRef(null);
 
   // Auth check on mount
@@ -252,10 +262,12 @@ export default function TillScreen() {
         payment_method: payment,
         fulfilment,
         amount_tendered: payment === 'cash' && tendered !== '' ? Number(tendered) : undefined,
+        customer_id: customer?.id || undefined,
       });
       setReceipt(sale);
       setLastSale(sale);
       setBasket([]);
+      setCustomer(null); setCustQ(''); setCustHits([]);
       setBasketDiscount(null);
       setTendered('');
       setFulfilment('takeaway');
@@ -436,6 +448,21 @@ export default function TillScreen() {
             </div>
           )}
 
+          <div className="till-customer">
+            {customer ? (
+              <span className="till-customer-chip">👤 {customer.name || customer.email || customer.phone}{customer.order_count ? <span className="muted"> · {customer.order_count} orders</span> : ''}<button type="button" className="till-x" onClick={() => { setCustomer(null); setCustQ(''); }} title="Remove customer">×</button></span>
+            ) : (
+              <>
+                <input value={custQ} onChange={(e) => setCustQ(e.target.value)} placeholder="Customer (phone, email or name) — optional" style={{ margin: 0 }} />
+                {(custHits.length > 0 || custQ.trim().length >= 2) && (
+                  <div className="till-customer-list">
+                    {custHits.map((h) => <button type="button" key={h.id} onClick={() => { setCustomer(h); setCustHits([]); }}>{h.name || '—'} <span className="muted">{h.phone || ''} {h.email || ''}{h.order_count ? ` · ${h.order_count} orders` : ''}</span></button>)}
+                    <button type="button" onClick={() => setCustAdd({ name: /\d{5,}/.test(custQ) ? '' : custQ.trim(), phone: /\d{5,}/.test(custQ) ? custQ.trim() : '', email: custQ.includes('@') ? custQ.trim() : '' })}>+ New customer “{custQ.trim()}”</button>
+                  </div>
+                )}
+              </>
+            )}
+          </div>
           <div className="till-pay">
             <div className="row" style={{ gap: 8 }}>
               <button className={`btn ${payment === 'cash' ? '' : 'secondary'}`} onClick={() => setPayment('cash')}>💵 Cash</button>
@@ -479,6 +506,22 @@ export default function TillScreen() {
       )}
 
       {postOpen && <PostalOrders onClose={() => setPostOpen(false)} />}
+      {custAdd && (
+        <div className="till-modal" onClick={() => setCustAdd(null)} style={{ zIndex: 55 }}>
+          <form className="till-receipt" style={{ width: 380 }} onClick={(e) => e.stopPropagation()} onSubmit={async (e) => {
+            e.preventDefault();
+            try { const c = await api.tillCreateCustomer(custAdd); setCustomer(c); setCustAdd(null); setCustQ(''); setCustHits([]); }
+            catch (err) { showFlash('err', err.message); }
+          }}>
+            <h3 style={{ marginTop: 0 }}>New customer</h3>
+            <label>Name</label><input value={custAdd.name} onChange={(e) => setCustAdd({ ...custAdd, name: e.target.value })} autoFocus />
+            <label>Phone</label><input value={custAdd.phone} onChange={(e) => setCustAdd({ ...custAdd, phone: e.target.value })} inputMode="tel" />
+            <label>Email (optional)</label><input value={custAdd.email} onChange={(e) => setCustAdd({ ...custAdd, email: e.target.value })} inputMode="email" />
+            <p className="muted" style={{ fontSize: 12 }}>Marketing consent is recorded by a manager in Admin → Customers.</p>
+            <div className="row" style={{ gap: 8, marginTop: 10 }}><button type="button" className="btn secondary" onClick={() => setCustAdd(null)}>Cancel</button><div className="spacer" /><button className="btn">Add & attach</button></div>
+          </form>
+        </div>
+      )}
       {voiding && (
         <div className="till-modal" onClick={() => setVoiding(null)} style={{ zIndex: 55 }}>
           <div className="till-receipt" style={{ width: 380 }} onClick={(e) => e.stopPropagation()}>

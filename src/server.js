@@ -20,6 +20,8 @@ const aiService = require('./services/aiService');
 const delivery = require('./services/delivery');
 const messenger = require('./services/messengerService');
 const emailService = require('./services/emailService');
+const crm = require('./services/crm'); // SIAMSHOP-CRM-001
+if (process.env.SIAMSHOP_FAKE_EMAIL === '1') { crm.useFakeTransport(); console.log('[crm] FAKE email transport (test rig)'); }
 const carriers = require('./services/carriers');
 const assistant = require('./services/assistantService');
 const availability = require('./services/availability');
@@ -128,7 +130,7 @@ const ROLE_ALLOW = {
     ['GET', /^\/api\/admin\/me$/], ['GET', /^\/api\/admin\/products$/], ['GET', /^\/api\/admin\/orders(\/|$)/],
     ['*', /^\/api\/sales(\/|$)/], ['*', /^\/api\/prep(\/|$)/], ['GET', /^\/api\/products\/lookup$/],
     ['*', /^\/api\/stock\/(receive|stocktake|goods-in-batch|scan-invoice|movements)$/], ['GET', /^\/api\/staff\/me$/], ['POST', /^\/api\/staff\/change-pin$/],
-    ['*', /^\/api\/till\/(\/|$)/], ['*', /^\/api\/till\/session(\/|$)/], ['POST', /^\/api\/till\/void$/], ['GET', /^\/api\/till\/sessions(\/|$)/],
+    ['*', /^\/api\/till\/(\/|$)/], ['*', /^\/api\/till\/session(\/|$)/], ['POST', /^\/api\/till\/void$/], ['*', /^\/api\/till\/customers$/], ['GET', /^\/api\/till\/sessions(\/|$)/],
     ['POST', /^\/api\/admin\/orders\/\d+\/(ready|collected|dispatch|label-printed|refund)$/], ['GET', /^\/api\/admin\/orders\/\d+\/refunds$/],
   ],
   prep: [
@@ -322,12 +324,18 @@ async function upsertCustomer(client, shopId, customer) {
   const email = String(customer?.email || '').trim().toLowerCase();
   if (!email) return null;
   const { rows } = await client.query(
-    `INSERT INTO customers (shop_id, email, name, phone, marketing_consent)
-     VALUES ($1,$2,$3,$4,$5)
+    `INSERT INTO customers (shop_id, email, name, phone, marketing_consent, consent_source, consent_at)
+     VALUES ($1,$2,$3,$4,$5, CASE WHEN $5 THEN 'online' ELSE NULL END, CASE WHEN $5 THEN NOW() ELSE NULL END)
      ON CONFLICT (shop_id, email) DO UPDATE SET
        name = COALESCE(EXCLUDED.name, customers.name),
        phone = COALESCE(EXCLUDED.phone, customers.phone),
-       marketing_consent = EXCLUDED.marketing_consent
+       -- Checkout tick = consent given online (source + time kept for GDPR). It never
+       -- undoes an unsubscribe: unsubscribed_at stays and keeps them ineligible.
+       marketing_consent = CASE WHEN customers.unsubscribed_at IS NOT NULL THEN FALSE ELSE EXCLUDED.marketing_consent END,
+       consent_source = CASE WHEN customers.unsubscribed_at IS NOT NULL THEN customers.consent_source
+                             WHEN EXCLUDED.marketing_consent <> customers.marketing_consent THEN 'online' ELSE customers.consent_source END,
+       consent_at = CASE WHEN customers.unsubscribed_at IS NOT NULL THEN customers.consent_at
+                         WHEN EXCLUDED.marketing_consent <> customers.marketing_consent THEN NOW() ELSE customers.consent_at END
      RETURNING id`,
     [shopId, email, customer?.name || null, customer?.phone || null, Boolean(customer?.marketing_consent)]
   );
@@ -1396,13 +1404,16 @@ app.post('/api/account/register', authLimiter, async (req, res) => {
       // Existing customer (from a past order) claiming their account.
       ({ rows: [{ id: cid }] } = await pool.query(
         `UPDATE customers SET password_hash = $3, name = COALESCE($4, name), phone = COALESCE($5, phone),
-                marketing_consent = $6 WHERE id = $1 AND shop_id = $2 RETURNING id`,
+                marketing_consent = CASE WHEN unsubscribed_at IS NOT NULL THEN FALSE ELSE $6 END,
+                consent_source = CASE WHEN unsubscribed_at IS NOT NULL THEN consent_source WHEN $6 <> marketing_consent THEN 'online' ELSE consent_source END,
+                consent_at = CASE WHEN unsubscribed_at IS NOT NULL THEN consent_at WHEN $6 <> marketing_consent THEN NOW() ELSE consent_at END
+         WHERE id = $1 AND shop_id = $2 RETURNING id`,
         [ex[0].id, shopId, hashPassword(password), req.body?.name || null, req.body?.phone || null, Boolean(req.body?.marketing_consent)]
       ));
     } else {
       ({ rows: [{ id: cid }] } = await pool.query(
-        `INSERT INTO customers (shop_id, email, name, phone, marketing_consent, password_hash)
-         VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
+        `INSERT INTO customers (shop_id, email, name, phone, marketing_consent, password_hash, consent_source, consent_at)
+         VALUES ($1,$2,$3,$4,$5,$6, CASE WHEN $5 THEN 'online' ELSE NULL END, CASE WHEN $5 THEN NOW() ELSE NULL END) RETURNING id`,
         [shopId, email, req.body?.name || null, req.body?.phone || null, Boolean(req.body?.marketing_consent), hashPassword(password)]
       ));
     }
@@ -1445,7 +1456,7 @@ app.post('/api/account/login', authLimiter, async (req, res) => {
 app.get('/api/account', requireCustomer, async (req, res) => {
   try {
     const { rows } = await pool.query(
-      `SELECT c.id, c.name, c.email, c.phone, c.marketing_consent, c.created_at,
+      `SELECT c.id, c.name, c.email, c.phone, c.marketing_consent, c.birthday, c.created_at,
               (SELECT COUNT(*) FROM orders o WHERE o.customer_id = c.id)::int AS order_count,
               (SELECT COALESCE(SUM(o.total),0) FROM orders o WHERE o.customer_id = c.id AND o.payment_status='paid')::numeric AS total_spent
        FROM customers c WHERE c.id = $1`, [req.customer.cid]
@@ -1460,12 +1471,27 @@ app.get('/api/account', requireCustomer, async (req, res) => {
 
 app.put('/api/account', requireCustomer, async (req, res) => {
   try {
+    // Birthday (SIAMSHOP-CRM-001): 'MM-DD', no year; '' clears. Consent changes by
+    // the customer themselves are recorded as source 'online'.
+    let birthday = null, clearBirthday = false;
+    if (req.body?.birthday != null) {
+      const b = String(req.body.birthday).trim();
+      if (b === '') clearBirthday = true;
+      else if (!/^(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/.test(b)) return res.status(400).json({ error: 'Birthday must be MM-DD' });
+      else birthday = b;
+    }
+    const consent = req.body?.marketing_consent != null ? Boolean(req.body.marketing_consent) : null;
     const { rows } = await pool.query(
       `UPDATE customers SET name = COALESCE($2, name), phone = $3,
-              marketing_consent = COALESCE($4, marketing_consent)
-       WHERE id = $1 RETURNING id, name, email, phone, marketing_consent`,
+              -- An unsubscribed customer stays unsubscribed (Krit, CRM review): only a
+              -- manager's recorded re-opt-in (PUT /consent) brings them back.
+              marketing_consent = CASE WHEN unsubscribed_at IS NOT NULL THEN FALSE ELSE COALESCE($4, marketing_consent) END,
+              consent_source = CASE WHEN unsubscribed_at IS NOT NULL OR $4 IS NULL THEN consent_source ELSE 'online' END,
+              consent_at = CASE WHEN unsubscribed_at IS NOT NULL OR $4 IS NULL THEN consent_at ELSE NOW() END,
+              birthday = CASE WHEN $6 THEN NULL ELSE COALESCE($5, birthday) END
+       WHERE id = $1 RETURNING id, name, email, phone, marketing_consent, birthday`,
       [req.customer.cid, req.body?.name != null ? String(req.body.name) : null,
-       req.body?.phone ?? null, req.body?.marketing_consent != null ? Boolean(req.body.marketing_consent) : null]
+       req.body?.phone ?? null, consent, birthday, clearBirthday]
     );
     res.json(rows[0]);
   } catch (err) {
@@ -2003,6 +2029,7 @@ app.post('/api/sales', requireAuth, async (req, res) => {
   const staff = req.auth?.name || 'admin';
   // Till sales are takeaway unless staff mark the customer as eating in (SIAMSHOP-504).
   const fulfilment = req.body?.fulfilment === 'dine_in' ? 'dine_in' : 'takeaway';
+  const customerIdRaw = req.body?.customer_id != null && req.body.customer_id !== '' ? parseInt(req.body.customer_id, 10) : null; // SIAMSHOP-CRM-001
 
   if (items.length === 0) return res.status(400).json({ error: 'Cart is empty' });
 
@@ -2068,14 +2095,21 @@ app.post('/api/sales', requireAuth, async (req, res) => {
     const { sess, autoOpened: sessionAutoOpened } = await ensureOpenSession(client, shopId, staff, req.auth?.sid);
     const sessionId = sess[0]?.id || null;
     const sessionNeedsFloat = !!sess[0]?.auto_opened && Number(sess[0]?.float_amount) === 0;
+    // Attach the sale to a looked-up customer (SIAMSHOP-CRM-001) — same shop only.
+    let customerId = null;
+    if (Number.isInteger(customerIdRaw)) {
+      const { rows: cu } = await client.query(`SELECT id FROM customers WHERE id = $1 AND shop_id = $2`, [customerIdRaw, shopId]);
+      if (!cu[0]) throw httpError(400, 'Customer not found');
+      customerId = cu[0].id;
+    }
     const orderRes = await client.query(
       `INSERT INTO orders (shop_id, channel, status, subtotal, total, payment_method,
                            amount_tendered, change_given, staff, payment_status, fulfilled_at, fulfilment, session_id,
-                           discount_type, discount_value, discount_amount, discount_reason, discount_approved_by)
-       VALUES ($1,'instore','completed',$2,$3,$4,$5,$6,$7,'paid',NOW(),$8,$9,$10,$11,$12,$13,$14)
+                           discount_type, discount_value, discount_amount, discount_reason, discount_approved_by, customer_id)
+       VALUES ($1,'instore','completed',$2,$3,$4,$5,$6,$7,'paid',NOW(),$8,$9,$10,$11,$12,$13,$14,$15)
        RETURNING id, created_at`,
       [shopId, subtotal, total, paymentMethod, tendered, change, staff, fulfilment, sessionId,
-       basketDisc?.type || null, basketDisc?.value ?? null, discountAmount, basketDisc?.reason || null, approvedBy]
+       basketDisc?.type || null, basketDisc?.value ?? null, discountAmount, basketDisc?.reason || null, approvedBy, customerId]
     );
     const orderId = orderRes.rows[0].id;
 
@@ -3408,51 +3442,50 @@ app.get('/api/admin/report', requireAuth, async (req, res) => {
 // ---------------------------------------------------------------------------
 // Admin CRM — customers + spending (SIAMSHOP-006)
 // ---------------------------------------------------------------------------
-// Shared customer query — optionally filtered to marketing opt-ins.
-async function queryCustomers(shopId, consentOnly) {
-  const { rows } = await pool.query(
-    `SELECT c.id, c.name, c.email, c.phone, c.marketing_consent, c.created_at,
-            COUNT(o.id)::int AS order_count,
-            COALESCE(SUM(o.total) FILTER (WHERE o.payment_status = 'paid'), 0)::numeric AS total_spent,
-            MAX(o.created_at) AS last_order_at
-     FROM customers c
-     LEFT JOIN orders o ON o.customer_id = c.id
-     WHERE c.shop_id = $1 ${consentOnly ? 'AND c.marketing_consent = TRUE' : ''}
-     GROUP BY c.id
-     ORDER BY total_spent DESC, c.created_at DESC
-     LIMIT 2000`,
-    [shopId]
-  );
-  return rows.map((r) => ({ ...r, total_spent: Number(r.total_spent) }));
+// ---------------------------------------------------------------------------
+// CRM (SIAMSHOP-CRM-001): customers with spend / dates / top products / channels,
+// operator-managed consent, unsubscribe, campaigns, automations. All shop-scoped.
+// ---------------------------------------------------------------------------
+const consentParam = (req) => ['1', 'true', 'yes'].includes(String(req.query.consent || '').toLowerCase());
+const CONSENT_SOURCES = ['verbal', 'paper', 'counter', 'phone', 'online', 'import'];
+const BIRTHDAY_RE = /^(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/;
+async function crmList(shopId, req) {
+  const settings = await getSettings(shopId);
+  const lapsedDays = crm.lapsedDaysOf(settings);
+  const segment = String(req.query.segment || '');
+  let rows = segment ? await crm.segmentCustomers(pool, shopId, segment, { lapsedDays, forSending: false }) : await crm.customerRows(pool, shopId, { lapsedDays });
+  if (consentParam(req)) rows = rows.filter((c) => c.eligible);
+  return { rows, lapsedDays };
 }
 
-const consentParam = (req) => ['1', 'true', 'yes'].includes(String(req.query.consent || '').toLowerCase());
-
-app.get('/api/admin/customers', requireAuth, async (req, res) => {
+app.get('/api/admin/customers', requireAuth, requireManager, async (req, res) => {
   try {
     const shopId = await resolveShopId(req);
     if (!shopId) return res.status(404).json({ error: 'Shop not found' });
-    res.json(await queryCustomers(shopId, consentParam(req)));
+    const { rows, lapsedDays } = await crmList(shopId, req);
+    res.setHeader('X-Lapsed-Days', String(lapsedDays));
+    res.json(rows);
   } catch (err) {
     console.error('[admin/customers]', err.message);
     res.status(500).json({ error: 'Failed to load customers' });
   }
 });
 
-// Export customers as CSV (respects ?consent=1 for marketing opt-ins only).
-app.get('/api/admin/customers.csv', requireAuth, async (req, res) => {
+// Export customers as CSV (respects ?consent=1 and ?segment=).
+app.get('/api/admin/customers.csv', requireAuth, requireManager, async (req, res) => {
   try {
     const shopId = await resolveShopId(req);
     if (!shopId) return res.status(404).json({ error: 'Shop not found' });
-    const rows = await queryCustomers(shopId, consentParam(req));
-    const cols = ['id', 'name', 'email', 'phone', 'marketing_consent', 'order_count', 'total_spent', 'last_order_at', 'created_at'];
+    const { rows } = await crmList(shopId, req);
+    const cols = ['id', 'name', 'email', 'phone', 'status', 'marketing_consent', 'consent_source', 'consent_at', 'unsubscribed_at', 'birthday',
+      'order_count', 'total_spent', 'avg_basket', 'first_order_at', 'last_order_at', 'days_since_last', 'instore_count', 'online_count', 'postal_count', 'collection_count', 'top_products', 'created_at'];
     const esc = (v) => {
       if (v == null) return '';
-      const s = v instanceof Date ? v.toISOString() : String(v);
+      const s = v instanceof Date ? v.toISOString() : Array.isArray(v) ? v.map((t) => `${t.name} ×${t.qty}`).join('; ') : String(v);
       return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
     };
     const csv = [cols.join(',')].concat(rows.map((r) => cols.map((c) => esc(r[c])).join(','))).join('\r\n');
-    const tag = consentParam(req) ? 'marketing-' : '';
+    const tag = consentParam(req) ? 'marketing-' : req.query.segment ? `${String(req.query.segment).replace(/[^a-z0-9]/gi, '')}-` : '';
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader('Content-Disposition', `attachment; filename="siamshop-${tag}customers-${new Date().toISOString().slice(0, 10)}.csv"`);
     res.send(csv);
@@ -3462,30 +3495,354 @@ app.get('/api/admin/customers.csv', requireAuth, async (req, res) => {
   }
 });
 
-app.get('/api/admin/customers/:id', requireAuth, async (req, res) => {
+app.get('/api/admin/customers/:id', requireAuth, requireManager, async (req, res) => {
   try {
     const shopId = await resolveShopId(req);
     if (!shopId) return res.status(404).json({ error: 'Shop not found' });
-    const { rows } = await pool.query(
-      `SELECT c.id, c.name, c.email, c.phone, c.marketing_consent, c.created_at,
-              (c.password_hash IS NOT NULL) AS has_account,
-              (SELECT COUNT(*) FROM orders o WHERE o.customer_id = c.id)::int AS order_count,
-              (SELECT COALESCE(SUM(o.total),0) FROM orders o WHERE o.customer_id = c.id AND o.payment_status='paid')::numeric AS total_spent
-       FROM customers c WHERE c.id = $1 AND c.shop_id = $2`,
+    const settings = await getSettings(shopId);
+    const [cust] = await crm.customerRows(pool, shopId, { lapsedDays: crm.lapsedDaysOf(settings), id: req.params.id });
+    if (!cust) return res.status(404).json({ error: 'Customer not found' });
+    const { rows: orders } = await pool.query(
+      `SELECT o.id, o.channel, o.source, o.status, o.payment_status, o.payment_method, o.fulfilment, o.total, o.created_at,
+              COALESCE((SELECT string_agg(oi.qty || '× ' || oi.name_snapshot, ', ' ORDER BY oi.id) FROM order_items oi WHERE oi.order_id = o.id), '') AS items_text
+       FROM orders o WHERE o.customer_id = $1 AND o.shop_id = $2 ORDER BY o.created_at DESC LIMIT 200`,
       [req.params.id, shopId]
     );
-    if (!rows[0]) return res.status(404).json({ error: 'Customer not found' });
-    const { rows: orders } = await pool.query(
-      `SELECT id, channel, source, status, payment_status, payment_method, total, created_at
-       FROM orders WHERE customer_id = $1 ORDER BY created_at DESC LIMIT 200`,
-      [req.params.id]
+    const { rows: fires } = await pool.query(
+      `SELECT event_type, entity_key, sent, created_at FROM automation_fires WHERE shop_id = $1 AND customer_id = $2 ORDER BY created_at DESC LIMIT 20`, [shopId, req.params.id]
     );
-    res.json({ ...rows[0], total_spent: Number(rows[0].total_spent), orders });
+    res.json({ ...cust, orders, automations: fires });
   } catch (err) {
     console.error('[admin/customers/:id]', err.message);
     res.status(500).json({ error: 'Failed to load customer' });
   }
 });
+
+// Create a customer from Admin (manager) — walk-ins with a phone only are fine.
+async function createCustomer(shopId, body, { allowConsent }) {
+  const name = String(body?.name || '').trim().slice(0, 200);
+  const email = String(body?.email || '').trim().toLowerCase().slice(0, 300) || null;
+  const phone = String(body?.phone || '').replace(/[^\d+ ]/g, '').trim().slice(0, 50) || null;
+  if (!email && !phone) throw httpError(400, 'Enter an email or a phone number');
+  if (email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) throw httpError(400, 'Enter a valid email');
+  const consent = allowConsent && body?.marketing_consent === true;
+  const source = consent ? (CONSENT_SOURCES.includes(body?.consent_source) ? body.consent_source : 'counter') : null;
+  if (email) {
+    const { rows: ex } = await pool.query(`SELECT id FROM customers WHERE shop_id = $1 AND email = $2`, [shopId, email]);
+    if (ex[0]) { const e = httpError(409, 'A customer with this email already exists'); e.customer_id = ex[0].id; throw e; }
+  }
+  const { rows } = await pool.query(
+    `INSERT INTO customers (shop_id, name, email, phone, marketing_consent, consent_source, consent_at)
+     VALUES ($1,$2,$3,$4,$5,$6, CASE WHEN $5 THEN NOW() ELSE NULL END)
+     RETURNING id, name, email, phone, marketing_consent, consent_source, consent_at, created_at`,
+    [shopId, name || null, email, phone, consent, source]
+  );
+  return rows[0];
+}
+app.post('/api/admin/customers', requireAuth, requireManager, async (req, res) => {
+  try {
+    const shopId = await resolveShopId(req);
+    if (!shopId) return res.status(404).json({ error: 'Shop not found' });
+    res.status(201).json(await createCustomer(shopId, req.body, { allowConsent: true }));
+  } catch (err) {
+    if (err.httpStatus) return res.status(err.httpStatus).json({ error: err.message, customer_id: err.customer_id });
+    console.error('[admin/customers POST]', err.message);
+    res.status(500).json({ error: 'Failed to create customer' });
+  }
+});
+
+// Operator-recorded consent (manager): source + time are kept for GDPR; opting
+// in also clears a previous unsubscribe so they are eligible again.
+app.put('/api/admin/customers/:id/consent', requireAuth, requireManager, async (req, res) => {
+  try {
+    const shopId = await resolveShopId(req);
+    if (!shopId) return res.status(404).json({ error: 'Shop not found' });
+    const consent = req.body?.consent === true;
+    const source = CONSENT_SOURCES.includes(req.body?.source) ? req.body.source : 'verbal';
+    const { rows } = await pool.query(
+      `UPDATE customers SET marketing_consent = $3, consent_source = $4, consent_at = NOW(),
+              unsubscribed_at = CASE WHEN $3 THEN NULL ELSE unsubscribed_at END
+       WHERE id = $1 AND shop_id = $2 RETURNING id, marketing_consent, consent_source, consent_at, unsubscribed_at`,
+      [req.params.id, shopId, consent, source]
+    );
+    if (!rows[0]) return res.status(404).json({ error: 'Customer not found' });
+    res.json({ ...rows[0], recorded_by: req.auth?.name || 'Owner' });
+  } catch (err) {
+    console.error('[admin/customers consent]', err.message);
+    res.status(500).json({ error: 'Failed to update consent' });
+  }
+});
+app.put('/api/admin/customers/:id/birthday', requireAuth, requireManager, async (req, res) => {
+  try {
+    const shopId = await resolveShopId(req);
+    if (!shopId) return res.status(404).json({ error: 'Shop not found' });
+    const b = String(req.body?.birthday || '').trim();
+    if (b && !BIRTHDAY_RE.test(b)) return res.status(400).json({ error: 'Birthday must be MM-DD' });
+    const { rows } = await pool.query(`UPDATE customers SET birthday = $3 WHERE id = $1 AND shop_id = $2 RETURNING id, birthday`, [req.params.id, shopId, b || null]);
+    if (!rows[0]) return res.status(404).json({ error: 'Customer not found' });
+    res.json(rows[0]);
+  } catch (err) {
+    console.error('[admin/customers birthday]', err.message);
+    res.status(500).json({ error: 'Failed to update birthday' });
+  }
+});
+
+// Till: look a customer up by phone / email / name to attach an in-store sale
+// (cashier-allowed). Quick-add creates the record WITHOUT consent — a manager
+// records consent in Admin → Customers.
+app.get('/api/till/customers', requireAuth, async (req, res) => {
+  try {
+    const shopId = await resolveShopId(req);
+    if (!shopId) return res.status(404).json({ error: 'Shop not found' });
+    const q = String(req.query.q || '').trim();
+    if (q.length < 2) return res.json([]);
+    const digits = q.replace(/\D/g, '');
+    const { rows } = await pool.query(
+      `SELECT c.id, c.name, c.email, c.phone, c.marketing_consent,
+              (SELECT COUNT(*) FROM orders o WHERE o.customer_id = c.id AND o.payment_status = 'paid')::int AS order_count
+       FROM customers c WHERE c.shop_id = $1 AND (
+         c.email ILIKE $2 OR c.name ILIKE $2 OR ($3 <> '' AND regexp_replace(COALESCE(c.phone, ''), '\D', '', 'g') LIKE $4))
+       ORDER BY order_count DESC, c.name LIMIT 8`,
+      [shopId, `%${q}%`, digits, `%${digits}%`]
+    );
+    res.json(rows);
+  } catch (err) {
+    console.error('[till/customers]', err.message);
+    res.status(500).json({ error: 'Customer lookup failed' });
+  }
+});
+app.post('/api/till/customers', requireAuth, async (req, res) => {
+  try {
+    const shopId = await resolveShopId(req);
+    if (!shopId) return res.status(404).json({ error: 'Shop not found' });
+    const allowConsent = req.auth?.role === 'manager' || req.auth?.role === 'admin';
+    res.status(201).json(await createCustomer(shopId, req.body, { allowConsent }));
+  } catch (err) {
+    if (err.httpStatus) return res.status(err.httpStatus).json({ error: err.message, customer_id: err.customer_id });
+    console.error('[till/customers POST]', err.message);
+    res.status(500).json({ error: 'Failed to create customer' });
+  }
+});
+
+// One-click unsubscribe from an email link — no login. Honoured by campaigns AND automations.
+app.get('/api/unsubscribe', async (req, res) => {
+  const t = crm.parseUnsubscribeToken(req.query.token);
+  const page = (title, text) => `<!doctype html><html><body style="font-family:-apple-system,BlinkMacSystemFont,sans-serif;background:#f5f5f5;margin:0;padding:40px 16px;color:#1f2328;">
+    <div style="background:#fff;max-width:480px;margin:40px auto;padding:36px;border-radius:12px;text-align:center;box-shadow:0 2px 8px rgba(0,0,0,.06);">
+      <h1 style="font-family:Georgia,serif;color:#C9A84C;margin-top:0;">${title}</h1><p style="color:#555;line-height:1.6;">${text}</p></div></body></html>`;
+  if (!t) return res.status(400).type('html').send(page('Invalid link', 'This unsubscribe link is not valid. Please contact the shop.'));
+  try {
+    await pool.query(
+      `UPDATE customers SET unsubscribed_at = COALESCE(unsubscribed_at, NOW()), marketing_consent = FALSE, consent_source = 'unsubscribed', consent_at = NOW()
+       WHERE shop_id = $1 AND LOWER(email) = $2`, [t.shopId, t.email]
+    );
+    res.type('html').send(page("You're unsubscribed", `We've removed <strong>${t.email.replace(/[<>"]/g, '')}</strong> from our marketing emails. You won't hear from us again unless you opt back in at the shop or in your account.`));
+  } catch (err) {
+    console.error('[unsubscribe]', err.message);
+    res.status(500).type('html').send(page('Something went wrong', 'Please try again later.'));
+  }
+});
+
+// Public brand logo as an image (emails cannot embed data URLs reliably).
+app.get('/api/brand-logo', async (req, res) => {
+  try {
+    const shopId = await resolveShopId(req);
+    if (!shopId) return res.status(404).end();
+    const s = await getSettings(shopId);
+    const m = /^data:(image\/[a-z+]+);base64,(.+)$/i.exec(s.brand_logo || '');
+    if (!m) return res.status(404).end();
+    res.setHeader('Content-Type', m[1]);
+    res.setHeader('Cache-Control', 'public, max-age=86400');
+    res.send(Buffer.from(m[2], 'base64'));
+  } catch (err) { res.status(500).end(); }
+});
+
+// ── Campaigns (manager) ──────────────────────────────────────────────────────
+async function shopRow(shopId) {
+  const { rows } = await pool.query(`SELECT id, name, slug FROM shops WHERE id = $1`, [shopId]);
+  return rows[0];
+}
+app.get('/api/admin/campaigns/segments', requireAuth, requireManager, async (req, res) => {
+  try {
+    const shopId = await resolveShopId(req);
+    if (!shopId) return res.status(404).json({ error: 'Shop not found' });
+    const settings = await getSettings(shopId);
+    const lapsedDays = crm.lapsedDaysOf(settings);
+    const all = await crm.customerRows(pool, shopId, { lapsedDays });
+    const elig = all.filter((c) => c.eligible);
+    const { rows: cats } = await pool.query(`SELECT id, name FROM categories WHERE shop_id = $1 ORDER BY sort_order NULLS LAST, name`, [shopId]).catch(() => ({ rows: [] }));
+    const cap = crm.dailyCap(settings), sentToday = await crm.sentToday(pool, shopId);
+    res.json({
+      lapsed_days: lapsedDays, total: all.length, eligible: elig.length,
+      segments: [
+        { id: 'all', label: 'All consented', count: elig.length },
+        { id: 'lapsed', label: `Lapsed (${lapsedDays}+ days)`, count: elig.filter((c) => c.status === 'Lapsed').length },
+        { id: 'new', label: 'New (last 30 days)', count: elig.filter((c) => c.is_new).length },
+        { id: 'vip', label: 'VIP', count: elig.filter((c) => c.status === 'VIP').length },
+        { id: 'regular', label: 'Regular', count: elig.filter((c) => c.status === 'Regular').length },
+      ],
+      categories: cats,
+      cap: { daily: cap, sent_today: sentToday, remaining: Math.max(0, cap - sentToday) },
+    });
+  } catch (err) {
+    console.error('[campaigns/segments]', err.message);
+    res.status(500).json({ error: 'Failed to load audiences' });
+  }
+});
+app.get('/api/admin/campaigns/recipient-count', requireAuth, requireManager, async (req, res) => {
+  try {
+    const shopId = await resolveShopId(req);
+    if (!shopId) return res.status(404).json({ error: 'Shop not found' });
+    const settings = await getSettings(shopId);
+    const list = await crm.segmentCustomers(pool, shopId, String(req.query.segment || 'all'), { lapsedDays: crm.lapsedDaysOf(settings) });
+    const cap = crm.dailyCap(settings), sentToday = await crm.sentToday(pool, shopId);
+    res.json({ count: list.length, cap, sent_today: sentToday, remaining: Math.max(0, cap - sentToday) });
+  } catch (err) {
+    console.error('[campaigns/recipient-count]', err.message);
+    res.status(500).json({ error: 'Failed to count recipients' });
+  }
+});
+app.get('/api/admin/campaigns', requireAuth, requireManager, async (req, res) => {
+  try {
+    const shopId = await resolveShopId(req);
+    if (!shopId) return res.status(404).json({ error: 'Shop not found' });
+    const { rows } = await pool.query(
+      `SELECT id, subject, segment, recipient_count, sent_count, failed_count, is_test, created_by, created_at
+       FROM campaigns WHERE shop_id = $1 ORDER BY id DESC LIMIT 100`, [shopId]
+    );
+    res.json(rows);
+  } catch (err) {
+    console.error('[campaigns]', err.message);
+    res.status(500).json({ error: 'Failed to load campaigns' });
+  }
+});
+// Send (or test-send) a campaign. Refuses rather than half-fails when the
+// audience exceeds today's remaining Brevo allowance.
+app.post('/api/admin/campaigns/send', requireAuth, requireManager, async (req, res) => {
+  try {
+    const shopId = await resolveShopId(req);
+    if (!shopId) return res.status(404).json({ error: 'Shop not found' });
+    const subject = String(req.body?.subject || '').trim().slice(0, 500);
+    const body = String(req.body?.body || '').trim();
+    const segment = String(req.body?.segment || 'all');
+    const testTo = String(req.body?.test_to || '').trim().toLowerCase();
+    if (!subject) return res.status(400).json({ error: 'Subject is required' });
+    if (!body) return res.status(400).json({ error: 'Body is required' });
+    if (!process.env.BREVO_API_KEY && !crm.isFake()) return res.status(503).json({ error: 'Email is not configured on the server (BREVO_API_KEY) — nothing was sent.' });
+    const settings = await getSettings(shopId);
+    const shop = await shopRow(shopId);
+    const publicBase = originFromReq(req);
+    let recipients;
+    if (testTo) {
+      if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(testTo)) return res.status(400).json({ error: 'Enter a valid test address' });
+      recipients = [{ id: 0, name: req.auth?.name || 'Test', email: testTo }];
+    } else {
+      recipients = await crm.segmentCustomers(pool, shopId, segment, { lapsedDays: crm.lapsedDaysOf(settings) });
+      if (!recipients.length) return res.status(400).json({ error: 'No opted-in customers in this audience' });
+    }
+    const cap = crm.dailyCap(settings), sentToday = await crm.sentToday(pool, shopId);
+    if (sentToday + recipients.length > cap) {
+      return res.status(400).json({ error: `This send needs ${recipients.length} emails but only ${Math.max(0, cap - sentToday)} remain today on your email plan (${cap}/day). Split the audience or raise the daily cap in Campaigns → Automations.`, code: 'daily_cap' });
+    }
+    const { rows: [camp] } = await pool.query(
+      `INSERT INTO campaigns (shop_id, subject, body, segment, recipient_count, is_test, created_by) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
+      [shopId, subject, body, testTo ? `test:${testTo}` : segment, recipients.length, !!testTo, req.auth?.name || 'Owner']
+    );
+    const r = await crm.sendToCustomers(pool, { shop, settings, publicBase, recipients, subject, body });
+    await pool.query(`UPDATE campaigns SET sent_count = $2, failed_count = $3 WHERE id = $1`, [camp.id, r.sent, r.failed]);
+    if (r.sent === 0 && r.failed > 0) return res.status(502).json({ error: `Email provider rejected every send: ${r.errors[0] || 'unknown error'}`, campaign_id: camp.id, ...r });
+    res.json({ success: true, campaign_id: camp.id, recipient_count: recipients.length, ...r, test: !!testTo });
+  } catch (err) {
+    console.error('[campaigns/send]', err.message);
+    res.status(500).json({ error: 'Send failed' });
+  }
+});
+
+// ── Automations (manager) ────────────────────────────────────────────────────
+function automationView(settings) {
+  const out = { lapsed_days: crm.lapsedDaysOf(settings), brevo_daily_cap: crm.dailyCap(settings), automations: {} };
+  for (const k of crm.AUTOMATIONS) {
+    out.automations[k] = {
+      enabled: settings[`auto_${k}_enabled`] === '1' || settings[`auto_${k}_enabled`] === 'true',
+      subject: settings[`auto_${k}_subject`] || crm.DEFAULT_TEMPLATES[k].subject,
+      body: settings[`auto_${k}_body`] || crm.DEFAULT_TEMPLATES[k].body,
+    };
+  }
+  return out;
+}
+app.get('/api/admin/automations', requireAuth, requireManager, async (req, res) => {
+  try {
+    const shopId = await resolveShopId(req);
+    if (!shopId) return res.status(404).json({ error: 'Shop not found' });
+    const settings = await getSettings(shopId);
+    const { rows: recent } = await pool.query(
+      `SELECT f.event_type, f.entity_key, f.sent, f.error, f.created_at, c.name AS customer_name, c.email AS customer_email
+       FROM automation_fires f LEFT JOIN customers c ON c.id = f.customer_id WHERE f.shop_id = $1 ORDER BY f.created_at DESC LIMIT 30`, [shopId]
+    );
+    res.json({ ...automationView(settings), recent, defaults: crm.DEFAULT_TEMPLATES });
+  } catch (err) {
+    console.error('[automations]', err.message);
+    res.status(500).json({ error: 'Failed to load automations' });
+  }
+});
+app.put('/api/admin/automations', requireAuth, requireManager, async (req, res) => {
+  try {
+    const shopId = await resolveShopId(req);
+    if (!shopId) return res.status(404).json({ error: 'Shop not found' });
+    const upd = {};
+    if (req.body?.lapsed_days != null) { const n = parseInt(req.body.lapsed_days, 10); if (!Number.isInteger(n) || n < 7 || n > 365) return res.status(400).json({ error: 'Lapsed days must be 7–365' }); upd.crm_lapsed_days = String(n); }
+    if (req.body?.brevo_daily_cap != null) { const n = parseInt(req.body.brevo_daily_cap, 10); if (!Number.isInteger(n) || n < 1 || n > 100000) return res.status(400).json({ error: 'Daily cap must be 1–100000' }); upd.brevo_daily_cap = String(n); }
+    for (const k of crm.AUTOMATIONS) {
+      const a = req.body?.automations?.[k] || req.body?.[k];
+      if (!a) continue;
+      if (a.enabled != null) upd[`auto_${k}_enabled`] = a.enabled ? '1' : '0';
+      if (a.subject != null) upd[`auto_${k}_subject`] = String(a.subject).slice(0, 500);
+      if (a.body != null) upd[`auto_${k}_body`] = String(a.body).slice(0, 20000);
+    }
+    for (const [key, value] of Object.entries(upd)) {
+      await pool.query(`INSERT INTO shop_settings (shop_id, key, value) VALUES ($1,$2,$3) ON CONFLICT (shop_id, key) DO UPDATE SET value = EXCLUDED.value`, [shopId, key, value]);
+    }
+    res.json(automationView(await getSettings(shopId)));
+  } catch (err) {
+    console.error('[automations PUT]', err.message);
+    res.status(500).json({ error: 'Failed to save automations' });
+  }
+});
+// Run this shop's automations now (also what the hourly timer does for every shop).
+app.post('/api/admin/automations/run', requireAuth, requireManager, async (req, res) => {
+  try {
+    const shopId = await resolveShopId(req);
+    if (!shopId) return res.status(404).json({ error: 'Shop not found' });
+    if (!process.env.BREVO_API_KEY && !crm.isFake()) return res.status(503).json({ error: 'Email is not configured on the server (BREVO_API_KEY) — nothing was sent.' });
+    const settings = await getSettings(shopId);
+    const out = await crm.runAutomationsForShop(pool, { shop: await shopRow(shopId), settings, publicBase: originFromReq(req) });
+    res.json(out);
+  } catch (err) {
+    console.error('[automations/run]', err.message);
+    res.status(500).json({ error: 'Run failed' });
+  }
+});
+async function runAllAutomations() {
+  if (!process.env.BREVO_API_KEY && !crm.isFake()) return;
+  try {
+    const { rows: shops } = await pool.query(`SELECT id, name, slug FROM shops`);
+    for (const shop of shops) {
+      const settings = await getSettings(shop.id);
+      if (!crm.AUTOMATIONS.some((k) => settings[`auto_${k}_enabled`] === '1' || settings[`auto_${k}_enabled`] === 'true')) continue;
+      const out = await crm.runAutomationsForShop(pool, { shop, settings, publicBase: publicBaseUrl() });
+      if (out.lapsed || out.review || out.birthday) console.log(`[crm] automations for ${shop.slug}: lapsed ${out.lapsed}, review ${out.review}, birthday ${out.birthday}`);
+    }
+  } catch (err) { console.error('[crm] automation run failed:', err.message); }
+}
+if (process.env.SIAMSHOP_AUTOMATIONS !== 'off') {
+  setTimeout(runAllAutomations, 90 * 1000).unref(); // shortly after boot, then hourly
+  setInterval(runAllAutomations, 60 * 60 * 1000).unref();
+}
+// Test rig only: what the fake transport "sent".
+if (process.env.SIAMSHOP_FAKE_EMAIL === '1') {
+  app.get('/api/_test/emails', requireAuth, (req, res) => res.json(crm.sentLog));
+  app.delete('/api/_test/emails', requireAuth, (req, res) => { crm.sentLog.length = 0; res.json({ ok: true }); });
+}
 
 // Delete a customer (GDPR erasure). Their past orders are KEPT for sales/audit
 // history but anonymised — orders.customer_id is set NULL automatically by the

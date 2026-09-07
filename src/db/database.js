@@ -385,6 +385,46 @@ async function initDB() {
     `);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_void_log_shop_at ON void_log(shop_id, created_at DESC)`);
 
+    // SIAMSHOP-CRM-001 — customers become a CRM: operator-managed consent with
+    // source + time, one-click unsubscribe, birthday (MM-DD, no year), walk-in
+    // customers without an email (phone only), campaign log, automation fires.
+    await pool.query(`ALTER TABLE customers ALTER COLUMN email DROP NOT NULL`).catch(() => {});
+    await pool.query(`ALTER TABLE customers ADD COLUMN IF NOT EXISTS consent_source VARCHAR(40)`);
+    await pool.query(`ALTER TABLE customers ADD COLUMN IF NOT EXISTS consent_at TIMESTAMPTZ`);
+    await pool.query(`ALTER TABLE customers ADD COLUMN IF NOT EXISTS unsubscribed_at TIMESTAMPTZ`);
+    await pool.query(`ALTER TABLE customers ADD COLUMN IF NOT EXISTS birthday VARCHAR(5)`);
+    await pool.query(`ALTER TABLE customers ADD COLUMN IF NOT EXISTS notes TEXT`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_customers_shop_phone ON customers(shop_id, phone)`);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS campaigns (
+        id              SERIAL PRIMARY KEY,
+        shop_id         INTEGER NOT NULL REFERENCES shops(id) ON DELETE CASCADE,
+        subject         VARCHAR(500) NOT NULL,
+        body            TEXT NOT NULL,
+        segment         VARCHAR(80) NOT NULL,
+        recipient_count INTEGER NOT NULL DEFAULT 0,
+        sent_count      INTEGER NOT NULL DEFAULT 0,
+        failed_count    INTEGER NOT NULL DEFAULT 0,
+        is_test         BOOLEAN NOT NULL DEFAULT FALSE,
+        created_by      VARCHAR(120),
+        created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_campaigns_shop_at ON campaigns(shop_id, created_at DESC)`);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS automation_fires (
+        id          SERIAL PRIMARY KEY,
+        shop_id     INTEGER NOT NULL REFERENCES shops(id) ON DELETE CASCADE,
+        event_type  VARCHAR(40) NOT NULL,      -- lapsed | review | birthday
+        entity_key  VARCHAR(120) NOT NULL,     -- customer:<id> | order:<id> | customer:<id>:<year>
+        customer_id INTEGER REFERENCES customers(id) ON DELETE SET NULL,
+        sent        BOOLEAN NOT NULL DEFAULT FALSE,
+        error       TEXT,
+        created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (shop_id, event_type, entity_key)
+      )
+    `);
+
     // Helpful indexes for the hot paths.
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_products_shop ON products(shop_id, is_active)`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_orders_shop ON orders(shop_id, created_at DESC)`);

@@ -12,6 +12,7 @@ import CustomersSection from './CustomersSection.jsx';
 import SettingsSection from './SettingsSection.jsx';
 import StaffSection from './StaffSection.jsx';
 import DeviceSection from './DeviceSection.jsx';
+import CampaignsSection from './CampaignsSection.jsx';
 
 const TABS = [
   { key: 'dashboard', label: 'Dashboard', Comp: DashboardSection },
@@ -20,6 +21,7 @@ const TABS = [
   { key: 'categories', label: 'Categories', Comp: CategoriesSection },
   { key: 'orders', label: 'Orders', Comp: OrdersSection },
   { key: 'customers', label: 'Customers', Comp: CustomersSection },
+  { key: 'campaigns', label: 'Campaigns', Comp: CampaignsSection },
   { key: 'staff', label: 'Staff', Comp: StaffSection },
   { key: 'settings', label: 'Settings', Comp: SettingsSection },
   ...(isElectron ? [{ key: 'device', label: 'This device', Comp: DeviceSection }] : []),

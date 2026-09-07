@@ -167,8 +167,23 @@ export const api = {
   adminListCustomers: (consentOnly) => request(`/api/admin/customers${consentOnly ? '?consent=1' : ''}`, { authed: true }),
   adminGetCustomer: (id) => request(`/api/admin/customers/${id}`, { authed: true }),
   adminDeleteCustomer: (id) => request(`/api/admin/customers/${id}`, { method: 'DELETE', authed: true }),
-  exportCustomersCsv: async (consentOnly) => {
-    const res = await fetch(`${API_BASE}${withShop(`/api/admin/customers.csv${consentOnly ? '?consent=1' : ''}`)}`, {
+  // CRM (SIAMSHOP-CRM-001)
+  adminListCustomersSeg: (segment) => request(`/api/admin/customers${segment ? `?segment=${encodeURIComponent(segment)}` : ''}`, { authed: true }),
+  adminCreateCustomer: (body) => request('/api/admin/customers', { method: 'POST', body, authed: true }),
+  adminSetConsent: (id, consent, source) => request(`/api/admin/customers/${id}/consent`, { method: 'PUT', body: { consent, source }, authed: true }),
+  adminSetBirthday: (id, birthday) => request(`/api/admin/customers/${id}/birthday`, { method: 'PUT', body: { birthday }, authed: true }),
+  tillFindCustomers: (q) => request(`/api/till/customers?q=${encodeURIComponent(q)}`, { authed: true }),
+  tillCreateCustomer: (body) => request('/api/till/customers', { method: 'POST', body, authed: true }),
+  campaignSegments: () => request('/api/admin/campaigns/segments', { authed: true }),
+  campaignRecipientCount: (segment) => request(`/api/admin/campaigns/recipient-count?segment=${encodeURIComponent(segment)}`, { authed: true }),
+  campaigns: () => request('/api/admin/campaigns', { authed: true }),
+  campaignSend: (body) => request('/api/admin/campaigns/send', { method: 'POST', body, authed: true }),
+  automations: () => request('/api/admin/automations', { authed: true }),
+  automationsSave: (body) => request('/api/admin/automations', { method: 'PUT', body, authed: true }),
+  automationsRun: () => request('/api/admin/automations/run', { method: 'POST', authed: true }),
+  exportCustomersCsv: async (consentOnly, segment) => {
+    const qs = [consentOnly ? 'consent=1' : '', segment ? `segment=${encodeURIComponent(segment)}` : ''].filter(Boolean).join('&');
+    const res = await fetch(`${API_BASE}${withShop(`/api/admin/customers.csv${qs ? `?${qs}` : ''}`)}`, {
       headers: { Authorization: `Bearer ${auth.get()}` },
     });
     if (!res.ok) throw new Error('Export failed');
