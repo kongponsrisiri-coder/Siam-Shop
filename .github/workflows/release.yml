@@ -101,9 +101,11 @@ jobs:
           OUT=$("$BIN" --self-test 2>&1 | tee /dev/stderr) ; echo "$OUT" | grep -q "SELFTEST OK"
           if [ "$HAS_MAC_CERT" = "true" ]; then
             echo "— notarization gate"
+            # The .app is what Gatekeeper checks (inside the dmg and the zip); electron-builder
+            # staples the app, not the dmg — so the dmg line is informational only.
             xcrun stapler validate "$APP"
             spctl -a -vv -t exec "$APP" 2>&1 | tee /dev/stderr | grep -q "source=Notarized Developer ID"
-            for f in electron/dist-electron/*.dmg; do xcrun stapler validate "$f"; done
+            for f in electron/dist-electron/*.dmg; do xcrun stapler validate "$f" || echo "(dmg itself not stapled — expected; the app inside is)"; done
           else
             echo "no signing cert in this repo — notarization gate skipped"
           fi
