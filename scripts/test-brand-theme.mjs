@@ -37,7 +37,9 @@ check('the header underline follows the accent', props.get('--brand-accent-soft'
 console.log('— a pale brand still reads');
 props.clear();
 applyBrandTheme({ brand_primary: '#E9C09F', brand_accent: '#131313' });
-check('pale primary gets dark button text, never white on cream', props.get('--brand-action-ink') === '#1f2328');
+check('a pale header takes dark text', props.get('--brand-on-primary') === '#1f2328');
+check('and is not used as a button fill, so controls stay visible', !props.has('--brand-action'));
+check('its dark accent can still sit on that header', props.get('--brand-accent-on-primary') === '#131313');
 
 console.log('— a shop with no brand keeps Action Red');
 props.clear();
@@ -65,8 +67,7 @@ check('header text turns dark over a cream header', props.get('--brand-on-primar
 check('headings and prices stop being cream on white', props.get('--brand-text') === '#1f2328', props.get('--brand-text'));
 check('a pale accent on a pale header steps aside too',
   props.get('--brand-accent-on-primary') === '#1f2328', props.get('--brand-accent-on-primary'));
-check('buttons still take the brand, with dark ink on it',
-  props.get('--brand-action') === '#fbf8f1' && props.get('--brand-action-ink') === '#1f2328');
+check('buttons do NOT take a near-white brand — that is covered below', !props.has('--brand-action'));
 
 props.clear();
 applyBrandTheme({ brand_primary: '#131313', brand_accent: '#E9C09F' });
@@ -74,6 +75,19 @@ check('a dark header keeps white text and its own accent',
   props.get('--brand-on-primary') === '#ffffff' && props.get('--brand-accent-on-primary') === '#E9C09F',
   { ink: props.get('--brand-on-primary'), accent: props.get('--brand-accent-on-primary') });
 check('a dark brand is still used for headings', props.get('--brand-text') === '#131313');
+
+console.log('— a brand too pale to be a button');
+props.clear();
+applyBrandTheme({ brand_primary: '#fbf8f1', brand_accent: '#E7A3B0' });
+check('a near-white brand is not used as a fill — Action Red stands',
+  !props.has('--brand-action') && !props.has('--brand-action-ink'), [...props.keys()]);
+check('but its header ink and heading colour are still derived',
+  props.get('--brand-on-primary') === '#1f2328' && props.get('--brand-text') === '#1f2328');
+
+props.clear();
+applyBrandTheme({ brand_primary: '#5B1A1A', brand_accent: '#E8D9B5' });
+check('a deep brand is still used as a fill, with white on it',
+  props.get('--brand-action') === '#5B1A1A' && props.get('--brand-action-ink') === '#ffffff');
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
