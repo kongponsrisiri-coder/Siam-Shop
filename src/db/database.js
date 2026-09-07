@@ -312,6 +312,19 @@ async function initDB() {
     await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS refunded_at TIMESTAMPTZ`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_orders_session ON orders(session_id)`);
 
+    // SIAMSHOP-CLOCK-001 — staff clock in/out events (paired into shifts client-side).
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS clock_events (
+        id          SERIAL PRIMARY KEY,
+        shop_id     INTEGER NOT NULL REFERENCES shops(id) ON DELETE CASCADE,
+        staff_id    INTEGER NOT NULL REFERENCES staff(id) ON DELETE CASCADE,
+        event_type  VARCHAR(3) NOT NULL,                 -- in | out
+        event_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_clock_events_staff_at ON clock_events(staff_id, event_at DESC)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_clock_events_shop_at ON clock_events(shop_id, event_at)`);
+
     // Helpful indexes for the hot paths.
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_products_shop ON products(shop_id, is_active)`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_orders_shop ON orders(shop_id, created_at DESC)`);

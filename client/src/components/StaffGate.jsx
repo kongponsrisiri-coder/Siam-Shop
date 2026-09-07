@@ -23,7 +23,8 @@ export function roleAllowed(role, need) {
 
 export default function StaffGate({ need = 'staff', title = 'Staff sign in', onIn }) {
   const [pin, setPin] = useState('');
-  const [mode, setMode] = useState('pin'); // pin | owner
+  const [mode, setMode] = useState('pin'); // pin | owner | clock
+  const [clocked, setClocked] = useState(null); // { name, event_type, event_at } after a clock toggle
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -38,6 +39,15 @@ export default function StaffGate({ need = 'staff', title = 'Staff sign in', onI
     setBusy(true);
     setError('');
     try {
+      // Clock mode (SIAMSHOP-CLOCK-001): the same pad clocks you in or out and
+      // stays on the sign-in screen — no till session is opened.
+      if (mode === 'clock') {
+        const c = await api.clockToggle(value);
+        setClocked(c);
+        setPin('');
+        setTimeout(() => { setClocked(null); setMode('pin'); }, 3500);
+        return;
+      }
       const r = await api.staffLogin(value);
       if (!roleAllowed(r.role, need)) {
         setError(need === 'manager' ? 'Manager PIN required for Admin.' : 'Not allowed.');
@@ -68,7 +78,7 @@ export default function StaffGate({ need = 'staff', title = 'Staff sign in', onI
 
   // Physical keyboard / scanner keypad.
   useEffect(() => {
-    if (mode !== 'pin') return undefined;
+    if (mode !== 'pin' && mode !== 'clock') return undefined;
     const onKey = (e) => {
       if (/^\d$/.test(e.key)) press(e.key);
       else if (e.key === 'Backspace') press('⌫');
@@ -105,8 +115,15 @@ export default function StaffGate({ need = 'staff', title = 'Staff sign in', onI
           {need === 'manager' ? 'Manager or owner only' : 'Enter your PIN'}
         </p>
 
-        {mode === 'pin' ? (
+        {clocked ? (
+          <div className="clock-done">
+            <div style={{ fontSize: 42 }}>{clocked.event_type === 'in' ? '🟢' : '🔴'}</div>
+            <h2 style={{ margin: '6px 0' }}>{clocked.name}</h2>
+            <p style={{ margin: 0 }}>Clocked <strong>{clocked.event_type === 'in' ? 'IN' : 'OUT'}</strong> at {new Date(clocked.event_at).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}</p>
+          </div>
+        ) : mode === 'pin' || mode === 'clock' ? (
           <>
+            {mode === 'clock' && <div className="tag ok" style={{ marginBottom: 6 }}>⏱ Clock in / out — enter your PIN</div>}
             <div className="pin-dots" aria-label="PIN">
               {[0, 1, 2, 3, 4, 5].map((i) => (
                 <span key={i} className={`pin-dot ${i < pin.length ? 'on' : ''} ${i >= 4 ? 'opt' : ''}`} />
@@ -120,12 +137,19 @@ export default function StaffGate({ need = 'staff', title = 'Staff sign in', onI
               ))}
             </div>
             <button type="button" className="btn" style={{ width: '100%', marginTop: 10 }} disabled={busy || pin.length < 4} onClick={() => submitPin(pin)}>
-              {busy ? 'Checking…' : 'Sign in'}
+              {busy ? 'Checking…' : mode === 'clock' ? 'Clock in / out' : 'Sign in'}
             </button>
             {error && <p className="err" style={{ marginTop: 10 }}>{error}</p>}
-            <button type="button" className="btn ghost" style={{ marginTop: 8 }} onClick={() => { setMode('owner'); setError(''); }}>
-              Owner password instead
-            </button>
+            <div className="row" style={{ gap: 6, justifyContent: 'center', marginTop: 8 }}>
+              {mode === 'clock' ? (
+                <button type="button" className="btn ghost" onClick={() => { setMode('pin'); setError(''); setPin(''); }}>← Back to sign in</button>
+              ) : (
+                <>
+                  <button type="button" className="btn ghost" onClick={() => { setMode('clock'); setError(''); setPin(''); }}>⏱ Clock in / out</button>
+                  <button type="button" className="btn ghost" onClick={() => { setMode('owner'); setError(''); }}>Owner password</button>
+                </>
+              )}
+            </div>
           </>
         ) : (
           <form onSubmit={submitOwner}>

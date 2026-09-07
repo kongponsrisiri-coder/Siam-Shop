@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { api } from '../../api.js';
+import { summarise, pairShifts, shiftHours, fmtHours, weekBounds, timesheetCsv } from '../../timesheet.js';
 
 // Staff & PINs (SIAMSHOP-ELECTRON-001). Manager/owner only. A PIN is 4–6
 // digits and unique within the shop — the till identifies who is signed in
@@ -62,7 +63,100 @@ function StaffForm({ initial, onSave, onCancel }) {
   );
 }
 
+// Timesheets (SIAMSHOP-CLOCK-001): week picker → paired shifts → hours per
+// staff, who is in right now, CSV export. Open shifts show as OPEN, never 24 h.
+function Timesheets() {
+  const [[from, to], setRange] = useState(() => weekBounds());
+  const [events, setEvents] = useState(null);
+  const [nowIn, setNowIn] = useState([]);
+  const [error, setError] = useState('');
+  const [expanded, setExpanded] = useState(null);
+
+  async function load(f = from, t = to) {
+    setError('');
+    try {
+      const [ev, st] = await Promise.all([api.clockRecords(f, t), api.clockStatus()]);
+      setEvents(ev); setNowIn(st);
+    } catch (e) { setError(e.message); }
+  }
+  useEffect(() => { load(); /* eslint-disable-next-line */ }, [from, to]);
+
+  function shiftWeek(delta) {
+    const d = new Date(from); d.setDate(d.getDate() + delta * 7);
+    setRange(weekBounds(d));
+  }
+  function exportCsv() {
+    const blob = new Blob([timesheetCsv(events || [])], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href = url; a.download = `timesheets_${from}_to_${to}.csv`;
+    document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
+  }
+  const rows = summarise(events || []);
+  const fmtT = (d) => new Date(d).toLocaleString('en-GB', { weekday: 'short', day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
+
+  return (
+    <div>
+      <div className="panel">
+        <h3 style={{ marginTop: 0 }}>Clocked in now</h3>
+        {nowIn.length === 0 ? <p className="muted">Nobody is clocked in.</p> : (
+          <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
+            {nowIn.map((s) => <span key={s.id} className="tag ok">🟢 {s.name} · since {new Date(s.clocked_in_at).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })}</span>)}
+          </div>
+        )}
+      </div>
+      <div className="panel">
+        <div className="row" style={{ gap: 8, flexWrap: 'wrap', alignItems: 'flex-end' }}>
+          <h3 style={{ margin: 0 }}>Timesheets</h3>
+          <div className="spacer" />
+          <button className="btn mini secondary" onClick={() => shiftWeek(-1)}>‹ Prev week</button>
+          <div>
+            <label>From</label>
+            <input type="date" value={from} onChange={(e) => setRange([e.target.value, to])} />
+          </div>
+          <div>
+            <label>To</label>
+            <input type="date" value={to} onChange={(e) => setRange([from, e.target.value])} />
+          </div>
+          <button className="btn mini secondary" onClick={() => shiftWeek(1)}>Next week ›</button>
+          <button className="btn mini secondary" onClick={() => setRange(weekBounds())}>This week</button>
+          <button className="btn mini" onClick={exportCsv} disabled={!events || events.length === 0}>⬇ Export CSV</button>
+        </div>
+        {error && <p className="err">{error}</p>}
+        {events === null && <p className="muted">Loading…</p>}
+        {events && rows.length === 0 && <p className="muted">No clock events in this range.</p>}
+        {rows.length > 0 && (
+          <table style={{ marginTop: 10 }}>
+            <thead><tr><th>Staff</th><th>Shifts</th><th style={{ textAlign: 'right' }}>Hours</th><th></th></tr></thead>
+            <tbody>
+              {rows.map((r) => (
+                <React.Fragment key={r.id}>
+                  <tr className="order-row" onClick={() => setExpanded(expanded === r.id ? null : r.id)}>
+                    <td><strong>{r.name}</strong> <span className="muted">· {r.role}</span></td>
+                    <td>{r.closedCount}{r.openCount ? <span className="tag off" style={{ marginLeft: 6 }}>{r.openCount} open — no clock-out</span> : ''}</td>
+                    <td style={{ textAlign: 'right', fontWeight: 700 }}>{fmtHours(r.totalHours)}</td>
+                    <td className="muted">{expanded === r.id ? '▲' : '▼'}</td>
+                  </tr>
+                  {expanded === r.id && r.shifts.map((s, i) => (
+                    <tr key={i} style={{ background: '#fafafa' }}>
+                      <td className="muted" style={{ paddingLeft: 24 }}>{fmtT(s.in)}</td>
+                      <td className="muted">{s.out ? `→ ${fmtT(s.out)}` : <span className="tag off">OPEN — no clock-out</span>}</td>
+                      <td style={{ textAlign: 'right' }}>{s.out ? fmtHours(shiftHours(s)) : '—'}</td>
+                      <td></td>
+                    </tr>
+                  ))}
+                </React.Fragment>
+              ))}
+            </tbody>
+          </table>
+        )}
+        <p className="muted" style={{ fontSize: 12 }}>Staff clock in and out with the ⏱ button on the sign-in screen. A shift that crosses midnight is counted in full; a forgotten clock-out shows as OPEN, not as hours.</p>
+      </div>
+    </div>
+  );
+}
+
 export default function StaffSection() {
+  const [view, setView] = useState('staff'); // staff | timesheets
   const [staff, setStaff] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -94,10 +188,16 @@ export default function StaffSection() {
   return (
     <div>
       <div className="row" style={{ marginTop: 16 }}>
-        <h2 style={{ margin: 0 }}>Staff &amp; PINs</h2>
+        <h2 style={{ margin: 0 }}>Staff</h2>
+        <div className="till-cats" style={{ marginLeft: 12 }}>
+          <button className={`till-cat ${view === 'staff' ? 'active' : ''}`} onClick={() => setView('staff')}>PINs &amp; roles</button>
+          <button className={`till-cat ${view === 'timesheets' ? 'active' : ''}`} onClick={() => setView('timesheets')}>⏱ Timesheets</button>
+        </div>
         <div className="spacer" />
-        <button className="btn" onClick={() => setEditing({})}>+ Add staff</button>
+        {view === 'staff' && <button className="btn" onClick={() => setEditing({})}>+ Add staff</button>}
       </div>
+      {view === 'timesheets' && <Timesheets />}
+      {view === 'staff' && <>
       <p className="muted" style={{ fontSize: 13 }}>
         Staff sign in to the till and prep screen with their PIN. Managers can also open Admin. The owner password always works as a fallback.
       </p>
@@ -131,6 +231,7 @@ export default function StaffSection() {
           )}
         </div>
       )}
+      </>}
     </div>
   );
 }

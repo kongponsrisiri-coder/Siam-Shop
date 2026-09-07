@@ -744,6 +744,73 @@ app.get('/api/staff/me', requireAuth, (req, res) => {
   res.json({ role: req.auth.role, name: req.auth.name || 'Owner', sid: req.auth.sid || null, expiresAt: req.auth.exp });
 });
 
+// ---------------------------------------------------------------------------
+// Clock in/out (SIAMSHOP-CLOCK-001). One button on the PIN pad: the server
+// looks at the person's LAST event and records the opposite. Timesheets pair
+// in→out client-side (shared client/src/timesheet.js) so the maths is testable.
+// ---------------------------------------------------------------------------
+app.post('/api/clock/toggle', pinLimiter, async (req, res) => {
+  try {
+    const shopId = await resolveShopId(req);
+    if (!shopId) return res.status(404).json({ error: 'Shop not found' });
+    const pin = String(req.body?.pin || '');
+    if (!PIN_RE.test(pin)) return res.status(400).json({ error: 'Enter your 4–6 digit PIN' });
+    const { rows } = await pool.query(
+      `SELECT id, name, pin_hash FROM staff WHERE shop_id = $1 AND active = TRUE AND (pin_lookup = $2 OR pin_lookup IS NULL)`,
+      [shopId, pinLookup(shopId, pin)]
+    );
+    const hit = rows.find((s) => verifyPassword(pin, s.pin_hash));
+    if (!hit) return res.status(401).json({ error: 'PIN not recognised' });
+    const last = await pool.query(
+      `SELECT event_type FROM clock_events WHERE staff_id = $1 ORDER BY event_at DESC, id DESC LIMIT 1`, [hit.id]
+    );
+    const next = last.rows[0]?.event_type === 'in' ? 'out' : 'in';
+    const { rows: ev } = await pool.query(
+      `INSERT INTO clock_events (shop_id, staff_id, event_type) VALUES ($1,$2,$3) RETURNING event_at`, [shopId, hit.id, next]
+    );
+    res.json({ ok: true, staff_id: hit.id, name: hit.name, event_type: next, event_at: ev[0].event_at });
+  } catch (err) {
+    console.error('[clock/toggle]', err.message);
+    res.status(500).json({ error: 'Clock in/out failed' });
+  }
+});
+// Who is clocked in right now (latest event = in). Manager/owner.
+app.get('/api/clock/status', requireAuth, requireManager, async (req, res) => {
+  try {
+    const shopId = await resolveShopId(req);
+    if (!shopId) return res.status(404).json({ error: 'Shop not found' });
+    const { rows } = await pool.query(
+      `SELECT s.id, s.name, s.role, ce.event_at AS clocked_in_at
+       FROM staff s JOIN clock_events ce ON ce.id = (
+         SELECT id FROM clock_events WHERE staff_id = s.id ORDER BY event_at DESC, id DESC LIMIT 1)
+       WHERE s.shop_id = $1 AND ce.event_type = 'in' ORDER BY s.name`, [shopId]
+    );
+    res.json(rows);
+  } catch (err) {
+    console.error('[clock/status]', err.message);
+    res.status(500).json({ error: 'Failed to load clock status' });
+  }
+});
+// Raw events in a window (inclusive dates, shop-local). Manager/owner.
+app.get('/api/clock/records', requireAuth, requireManager, async (req, res) => {
+  try {
+    const shopId = await resolveShopId(req);
+    if (!shopId) return res.status(404).json({ error: 'Shop not found' });
+    const from = String(req.query.from || '1970-01-01');
+    const to = String(req.query.to || '2999-12-31');
+    const { rows } = await pool.query(
+      `SELECT ce.id, ce.staff_id, s.name AS staff_name, s.role AS staff_role, ce.event_type, ce.event_at
+       FROM clock_events ce JOIN staff s ON s.id = ce.staff_id
+       WHERE ce.shop_id = $1 AND ce.event_at >= $2::date AND ce.event_at < ($3::date + interval '1 day')
+       ORDER BY ce.staff_id, ce.event_at, ce.id`, [shopId, from, to]
+    );
+    res.json(rows);
+  } catch (err) {
+    console.error('[clock/records]', err.message);
+    res.status(500).json({ error: 'Failed to load clock records' });
+  }
+});
+
 // Staff management — owner or manager only.
 app.get('/api/admin/staff', requireAuth, requireManager, async (req, res) => {
   try {
