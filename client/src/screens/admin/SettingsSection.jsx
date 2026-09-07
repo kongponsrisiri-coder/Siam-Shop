@@ -106,9 +106,10 @@ export default function SettingsSection() {
     }
   }
 
+  const [shopName, setShopName] = useState('');
   useEffect(() => {
     load();
-    api.getShop().then(setShop).catch(() => {});
+    api.getShop().then((sh) => { setShop(sh); setShopName(sh?.name || ''); }).catch(() => {});
     api.health().then(setHealth).catch(() => {});
   }, []);
 
@@ -139,6 +140,13 @@ export default function SettingsSection() {
       patch.receipt_footer = form.receipt_footer ?? '';
       patch.vat_number = form.vat_number ?? '';
       patch.receipt_copies = String(Math.min(3, Math.max(1, parseInt(form.receipt_copies, 10) || 1)));
+      // The name lives on the shop row, not in settings, so it saves first —
+      // if it is rejected the settings are left untouched rather than half done.
+      const wanted = shopName.trim().replace(/\s+/g, ' ');
+      if (wanted && shop && wanted !== shop.name) {
+        const sh = await api.adminUpdateShop(wanted);
+        setShop(sh); setShopName(sh.name);
+      }
       const updated = await api.adminUpdateSettings(patch);
       setForm(updated || form);
       setSaved(true);
@@ -159,6 +167,19 @@ export default function SettingsSection() {
       {!loading && form && (
         <form className="panel" onSubmit={save}>
           <h3 style={{ marginTop: 0 }}>Shop settings</h3>
+          <div style={{ marginBottom: 12 }}>
+            <label>Shop name</label>
+            <input
+              value={shopName}
+              onChange={(e) => { setShopName(e.target.value); setSaved(false); }}
+              placeholder="Your shop's name"
+              maxLength={200}
+            />
+            <div className="muted" style={{ fontSize: 12, marginTop: 4 }}>
+              Shown on the storefront banner, receipts, prep tickets and order emails.
+              The web address stays <strong>{shop?.slug || '…'}</strong>.
+            </div>
+          </div>
           <div className="row" style={{ gap: 12, flexWrap: 'wrap' }}>
             {FIELDS.map((f) => (
               <div key={f.key} style={{ flex: f.type === 'textarea' ? '1 1 100%' : '1 1 220px' }}>
@@ -212,7 +233,7 @@ export default function SettingsSection() {
                 </div>
               </div>
             </div>
-            <pre className="receipt-preview" style={{ flex: '0 0 auto' }}>{receiptPreview({ shopName: shop?.name || 'SiamShop', header: form.receipt_header, footer: form.receipt_footer, vatNumber: form.vat_number })}</pre>
+            <pre className="receipt-preview" style={{ flex: '0 0 auto' }}>{receiptPreview({ shopName: shopName || shop?.name || 'SiamShop', header: form.receipt_header, footer: form.receipt_footer, vatNumber: form.vat_number })}</pre>
           </div>
 
           <h3 style={{ marginTop: 20 }}>Discounts</h3>
@@ -276,7 +297,7 @@ export default function SettingsSection() {
         {shop ? (
           <table>
             <tbody>
-              <tr><th>Name</th><td>{shop.name}</td></tr>
+              <tr><th>Name</th><td>{shop.name} <span className="muted">— edit it under Shop settings</span></td></tr>
               <tr><th>Slug</th><td>{shop.slug}</td></tr>
               <tr><th>Shop ID</th><td>{shop.id}</td></tr>
             </tbody>

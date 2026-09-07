@@ -137,6 +137,8 @@ export const api = {
   adminGetSettings: () => request('/api/admin/settings', { authed: true }),
   adminUpdateSettings: (patch) =>
     request('/api/admin/settings', { method: 'PUT', body: patch, authed: true }),
+  adminUpdateShop: (name) =>
+    request('/api/admin/shop', { method: 'PUT', body: { name }, authed: true }),
   adminTestEmail: (to) => request('/api/admin/test-email', { method: 'POST', body: { to }, authed: true }),
 
   // Admin categories
