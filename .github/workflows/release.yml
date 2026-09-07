@@ -149,7 +149,24 @@ jobs:
         with:
           path: dist
       - run: ls -laR dist
-      # Public releases repo — the updater target baked into electron/package.json build.publish.
+      # 1) This (private) code repo — so the installers show up under Siam-Shop →
+      #    Releases for humans (Korakot 7 Sep: "couldn't find the files"). The
+      #    updater never reads this copy.
+      - name: Publish GitHub Release (code repo)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: SiamShop ${{ github.ref_name }}
+          generate_release_notes: true
+          fail_on_unmatched_files: false
+          files: |
+            dist/**/*.dmg
+            dist/**/*.zip
+            dist/**/*.exe
+            dist/**/*.blockmap
+            dist/**/latest-mac.yml
+            dist/**/latest.yml
+      # 2) Public releases repo — the updater target baked into electron/package.json build.publish.
       - name: Publish to kongponsrisiri-coder/siamshop-releases
         uses: softprops/action-gh-release@v2
         with:
