@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { shopName } from '../shopName.js';
 import { api } from '../api.js';
 import { desktop, electronConfig } from '../electron.js';
 import { printerDest, invalidatePrinters, migrateLegacyPrinters } from '../printers.js';
@@ -60,7 +61,7 @@ export default function PrintersCard({ onChanged, isManager }) {
       r = await desktop.printLabel(await buildLabelHtml(SAMPLE_LABEL), 1, p.usb_name);
     } else {
       let o = {};
-      try { const st = await api.getSettings(); o = { style: st.receipt_style || 'rendered', size: st.print_size || 'normal', logo: st.brand_logo || '', showLogo: !!st.receipt_show_logo, logoInvert: !!st.brand_logo_invert, shopName: electronConfig.shopName }; } catch {}
+      try { const st = await api.getSettings(); o = { style: st.receipt_style || 'rendered', size: st.print_size || 'normal', logo: st.brand_logo || '', showLogo: !!st.receipt_show_logo, logoInvert: !!st.brand_logo_invert, shopName: await shopName() }; } catch {}
       r = await desktop.testPrint(printerDest(p), o);
     }
     await api.printerTestResult(p.id, !!r?.ok).catch(() => {});

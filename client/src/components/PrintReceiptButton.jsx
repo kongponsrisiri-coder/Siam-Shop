@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { api } from '../api.js';
-import { isElectron, desktop, electronConfig } from '../electron.js';
+import { isElectron, desktop } from '../electron.js';
+import { shopName } from '../shopName.js';
 
 // Reprint a till receipt from Admin → Orders (SIAMSHOP-RECEIPT-001). Desktop
 // only — builds the same payload the till prints from the stored order.
@@ -11,7 +12,7 @@ export default function PrintReceiptButton({ order, settings }) {
     setMsg('Printing…');
     const st = settings || (await api.getSettings().catch(() => ({})));
     const r = await desktop.printReceipt({
-      shopName: electronConfig.shopName || 'SiamShop',
+      shopName: await shopName(),
       header: st.receipt_header || '', footer: st.receipt_footer || '',
       vatNote: st.vat_number ? `VAT No. ${st.vat_number}` : '', copies: 1,
       logo: st.brand_logo || '', showLogo: !!st.receipt_show_logo, logoInvert: !!st.brand_logo_invert,

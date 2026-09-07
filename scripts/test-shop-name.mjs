@@ -2,6 +2,9 @@
 // whatever was typed at sign-up; it is what the storefront banner, receipts,
 // prep tickets and order emails all say.
 //   BASE=http://localhost:5099 ADMIN_PASSWORD=… node scripts/test-shop-name.mjs
+import { readFileSync, readdirSync, statSync } from 'node:fs';
+import path from 'node:path';
+
 const BASE = process.env.BASE || 'http://localhost:4999';
 const PASS = process.env.ADMIN_PASSWORD || 'test-pass-123';
 let pass = 0, fail = 0;
@@ -49,6 +52,37 @@ check('200 characters is accepted', (await req('PUT', '/api/admin/shop', { name:
 
 r = await req('PUT', '/api/admin/shop', { name: before.name }, owner);
 check('renamed back for the next suite', r.status === 200 && r.data.name === before.name);
+
+console.log('— and every print path prints the live name, not the device\'s copy');
+// The till printed electronConfig.shopName, a copy written into the device
+// config at install time, so renaming the shop changed the receipt preview but
+// every till kept printing its old name (Korakot, 8 Sep). Nothing that builds a
+// print payload may read that copy again.
+const SRC = path.join(path.dirname(new URL(import.meta.url).pathname), '..', 'client', 'src');
+const files = [];
+(function walk(dir) {
+  for (const e of readdirSync(dir)) {
+    const f = path.join(dir, e);
+    if (statSync(f).isDirectory()) walk(f);
+    else if (/\.(jsx?|mjs)$/.test(e)) files.push(f);
+  }
+})(SRC);
+
+const offenders = [];
+for (const f of files) {
+  if (/[\\/]shopName\.js$/.test(f)) continue;                    // the helper itself falls back to it
+  if (/DeviceSection\.jsx$/.test(f)) continue;                    // shows the device's own config, on purpose
+  for (const [i, line] of readFileSync(f, 'utf8').split('\n').entries()) {
+    if (/electronConfig\.shopName/.test(line)) offenders.push(`${path.relative(SRC, f)}:${i + 1}`);
+  }
+}
+check('no print payload reads the device copy of the name', offenders.length === 0, offenders);
+check('the shared helper exists', files.some((f) => /[\\/]shopName\.js$/.test(f)));
+const helper = readFileSync(path.join(SRC, 'shopName.js'), 'utf8');
+check('it asks the shop record', /api\.getShop\(\)/.test(helper));
+check('it cannot hang a print — the lookup is raced against a timeout', /Promise\.race/.test(helper));
+check('it still falls back to the device copy, then SiamShop',
+  /electronConfig\.shopName/.test(helper) && /SiamShop/.test(helper));
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

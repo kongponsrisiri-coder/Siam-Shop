@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { shopName } from '../shopName.js';
 import { api, staffSession } from '../api.js';
 import { isElectron, desktop, electronConfig } from '../electron.js';
 import { loadPrinters } from '../printers.js';
@@ -94,7 +95,7 @@ export function PrintZButton({ z, label = '🖨 Print Z' }) {
   if (!isElectron) return null;
   return (
     <span className="row" style={{ gap: 8, alignItems: 'center', display: 'inline-flex' }}>
-      <button className="btn secondary" onClick={async () => { setMsg('Printing…'); const r = await desktop.printZ(z, electronConfig.shopName, (await loadPrinters().catch(() => null))?.receiptDest, await printOpts()); setMsg(r?.ok ? 'Printed' : `Print failed: ${r?.error}`); }}>{label}</button>
+      <button className="btn secondary" onClick={async () => { setMsg('Printing…'); const r = await desktop.printZ(z, await shopName(), (await loadPrinters().catch(() => null))?.receiptDest, await printOpts()); setMsg(r?.ok ? 'Printed' : `Print failed: ${r?.error}`); }}>{label}</button>
       {msg && <span className="muted" style={{ fontSize: 12 }}>{msg}</span>}
     </span>
   );
@@ -116,7 +117,7 @@ export function CloseTillModal({ summary, onClosed, onClose }) {
     try {
       const r = await api.tillClose(Number(counted), notes, approvalToken);
       setResult(r.summary);
-      if (isElectron && electronConfig.printer?.autoPrint !== false) Promise.all([loadPrinters().catch(() => null), printOpts()]).then(([p, o]) => desktop.printZ(r.summary, electronConfig.shopName, p?.receiptDest, o)).catch(() => {});
+      if (isElectron && electronConfig.printer?.autoPrint !== false) Promise.all([loadPrinters().catch(() => null), printOpts(), shopName()]).then(([p, o, name]) => desktop.printZ(r.summary, name, p?.receiptDest, o)).catch(() => {});
     } catch (e) {
       setError(e.message);
     } finally { setBusy(false); }

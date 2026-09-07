@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { api, auth, staffSession } from '../api.js';
 import { Logo } from '../components/Logo.jsx';
 import CashPad from '../components/CashPad.jsx';
+import { shopName } from '../shopName.js';
 import OptionPicker from '../components/OptionPicker.jsx';
 import StaffGate, { StaffChip } from '../components/StaffGate.jsx';
 import PostalOrders from '../components/PostalOrders.jsx';
@@ -298,7 +299,7 @@ export default function TillScreen() {
     const st = shopSettings || {};
     const r = await desktop.printReceipt({
       dest: await receiptDest(),
-      shopName: electronConfig.shopName || 'SiamShop',
+      shopName: await shopName(),
       header: st.receipt_header || '',
       footer: st.receipt_footer || '',
       vatNote: st.vat_number ? `VAT No. ${st.vat_number}` : '',
