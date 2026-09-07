@@ -147,7 +147,7 @@ function roleAllows(role, method, path) {
 async function requireAuth(req, res, next) {
   const m = /^Bearer\s+(.+)$/i.exec(req.get('authorization') || '');
   const payload = m ? verifyToken(m[1]) : null;
-  if (!payload || payload.role === 'customer') {
+  if (!payload || payload.role === 'customer' || payload.purpose === 'approve') {
     return res.status(401).json({ error: 'Not authenticated — please sign in again.' });
   }
   if (!roleAllows(payload.role, req.method, req.path)) {
@@ -176,6 +176,28 @@ async function requireAuth(req, res, next) {
 function pinLookup(shopId, pin) {
   return crypto.createHmac('sha256', AUTH_SECRET).update(`${shopId}:${pin}`).digest('base64url');
 }
+// One-off manager APPROVAL tokens (SIAMSHOP-DISCOUNT-001 / Krit A1 review):
+// a manager taps their PIN on the cashier's screen to approve ONE money action.
+// The token is not a session: purpose='approve', 60 s TTL, single use (jti).
+const APPROVAL_TTL_MS = 60 * 1000;
+const _usedApprovals = new Map(); // jti → exp
+function issueApproval(staff) {
+  const jti = crypto.randomBytes(12).toString('base64url');
+  const exp = Date.now() + APPROVAL_TTL_MS;
+  return { token: signToken({ purpose: 'approve', role: staff.role, name: staff.name, sid: staff.sid || null, shop: staff.shop, jti, exp }), exp };
+}
+// Verify + consume. Returns { name, role } or throws httpError(403, …).
+function consumeApproval(token, shopId) {
+  const p = token ? verifyToken(token) : null;
+  if (!p || p.purpose !== 'approve') throw httpError(403, 'Manager approval required');
+  if (p.role !== 'manager' && p.role !== 'admin') throw httpError(403, 'Approval must come from a manager');
+  if (p.shop != null && Number(p.shop) !== Number(shopId)) throw httpError(403, 'Approval belongs to a different shop');
+  if (_usedApprovals.has(p.jti)) throw httpError(403, 'That approval was already used — ask the manager again');
+  _usedApprovals.set(p.jti, p.exp);
+  for (const [k, e] of _usedApprovals) if (e < Date.now()) _usedApprovals.delete(k); // sweep
+  return { name: p.name || 'Owner', role: p.role };
+}
+
 // Manager/owner only (staff management, settings…). Use after requireAuth.
 function requireManager(req, res, next) {
   if (req.auth?.role === 'admin' || req.auth?.role === 'manager') return next();
@@ -740,6 +762,37 @@ app.post('/api/staff/login', pinLimiter, async (req, res) => {
     res.status(500).json({ error: 'Sign-in failed' });
   }
 });
+// Manager PIN → one-off approval token (60 s, single use). Owner password also works via /api/admin/login? No —
+// approvals always go through this endpoint so they are short-lived and single-use.
+app.post('/api/staff/approve', pinLimiter, async (req, res) => {
+  try {
+    const shopId = await resolveShopId(req);
+    if (!shopId) return res.status(404).json({ error: 'Shop not found' });
+    const pin = String(req.body?.pin || '');
+    const password = String(req.body?.password || '');
+    let who = null;
+    if (password) {
+      const expected = process.env.ADMIN_PASSWORD || '';
+      const a = Buffer.from(password), b = Buffer.from(expected);
+      if (expected && a.length === b.length && crypto.timingSafeEqual(a, b)) who = { role: 'admin', name: 'Owner', shop: shopId };
+    } else {
+      if (!PIN_RE.test(pin)) return res.status(400).json({ error: 'Enter the manager PIN' });
+      const { rows } = await pool.query(
+        `SELECT id, name, pin_hash, role FROM staff WHERE shop_id = $1 AND active = TRUE AND (pin_lookup = $2 OR pin_lookup IS NULL)`,
+        [shopId, pinLookup(shopId, pin)]
+      );
+      const hit = rows.find((s) => verifyPassword(pin, s.pin_hash));
+      if (hit) who = { role: hit.role, name: hit.name, sid: hit.id, shop: shopId };
+    }
+    if (!who) return res.status(401).json({ error: 'PIN not recognised' });
+    if (who.role !== 'manager' && who.role !== 'admin') return res.status(403).json({ error: 'That PIN is not a manager' });
+    const { token, exp } = issueApproval(who);
+    res.json({ token, name: who.name, role: who.role, expiresAt: exp, ttl_ms: APPROVAL_TTL_MS });
+  } catch (err) {
+    console.error('[staff/approve]', err.message);
+    res.status(500).json({ error: 'Approval failed' });
+  }
+});
 app.get('/api/staff/me', requireAuth, (req, res) => {
   res.json({ role: req.auth.role, name: req.auth.name || 'Owner', sid: req.auth.sid || null, expiresAt: req.auth.exp });
 });
@@ -934,6 +987,10 @@ app.get('/api/settings', async (req, res) => {
       restock_day: s.restock_day || null,
       currency: s.currency || 'GBP',
       shop_language_default: s.shop_language_default || 'en',
+      // SIAMSHOP-DISCOUNT-001 — the till needs the reasons list + approval thresholds.
+      discount_reasons: discountRules(s).reasons,
+      discount_pin_threshold_amount: discountRules(s).thresholdAmount,
+      discount_pin_threshold_percent: discountRules(s).thresholdPercent,
       // SIAMSHOP-RECEIPT-001 — printed on every till receipt (not secrets).
       receipt_header: s.receipt_header || '',
       receipt_footer: s.receipt_footer || '',
@@ -1883,6 +1940,8 @@ app.post('/api/sales', requireAuth, async (req, res) => {
     // sells at any stock level and never writes a movement.
     let subtotal = 0;
     const lines = [];
+    const rules = discountRules(await getSettings(shopId));
+    let lineDiscountTotal = 0, maxPercent = 0;
     for (const it of items) {
       const qty = Number(it.qty);
       if (!Number.isInteger(qty) || qty <= 0) throw httpError(400, 'Invalid quantity');
@@ -1897,12 +1956,31 @@ app.post('/api/sales', requireAuth, async (req, res) => {
         throw httpError(409, `Not enough stock for ${p.name} (${p.stock_qty} left)`);
       }
       const { snapshot, total: optionsTotal } = await resolveOptions(client, p, it.option_ids);
-      const lineTotal = +((Number(p.price) + optionsTotal) * qty).toFixed(2);
+      const gross = +((Number(p.price) + optionsTotal) * qty).toFixed(2);
+      // Line discount (SIAMSHOP-DISCOUNT-001) — priced here, never trusted from the client.
+      const disc = applyDiscount(it.discount, gross, rules, p.name);
+      const lineTotal = +(gross - (disc ? disc.amount : 0)).toFixed(2);
       subtotal += lineTotal;
-      lines.push({ product: p, qty, lineTotal, snapshot, optionsTotal });
+      if (disc) { lineDiscountTotal += disc.amount; maxPercent = Math.max(maxPercent, disc.type === 'percent' ? disc.value : (gross ? disc.amount / gross * 100 : 0)); }
+      lines.push({ product: p, qty, gross, lineTotal, snapshot, optionsTotal, disc });
     }
 
-    const total = subtotal; // no delivery fee in-store
+    // Basket discount on the (line-discounted) subtotal.
+    const basketDisc = applyDiscount(req.body?.discount, subtotal, rules, 'Basket');
+    if (basketDisc) maxPercent = Math.max(maxPercent, basketDisc.type === 'percent' ? basketDisc.value : (subtotal ? basketDisc.amount / subtotal * 100 : 0));
+    const discountAmount = +(lineDiscountTotal + (basketDisc ? basketDisc.amount : 0)).toFixed(2);
+    // Manager approval above the shop's threshold (£ total off, or % on any line/basket) — cashiers only.
+    let approvedBy = null;
+    if (discountAmount > 0 && req.auth?.role !== 'manager' && req.auth?.role !== 'admin' &&
+        (discountAmount > rules.thresholdAmount || maxPercent > rules.thresholdPercent)) {
+      if (!req.body?.approval_token) {
+        const e = httpError(403, `Discounts over £${rules.thresholdAmount.toFixed(2)} or ${rules.thresholdPercent}% need a manager's approval`);
+        e.code = 'approval_required';
+        throw e;
+      }
+      approvedBy = consumeApproval(req.body.approval_token, shopId).name;
+    }
+    const total = +(subtotal - (basketDisc ? basketDisc.amount : 0)).toFixed(2); // no delivery fee in-store
     let change = null;
     if (paymentMethod === 'cash' && tendered != null) {
       if (tendered < total) throw httpError(400, 'Amount tendered is less than the total');
@@ -1931,20 +2009,23 @@ app.post('/api/sales', requireAuth, async (req, res) => {
     const sessionNeedsFloat = !!sess[0]?.auto_opened && Number(sess[0]?.float_amount) === 0;
     const orderRes = await client.query(
       `INSERT INTO orders (shop_id, channel, status, subtotal, total, payment_method,
-                           amount_tendered, change_given, staff, payment_status, fulfilled_at, fulfilment, session_id)
-       VALUES ($1,'instore','completed',$2,$3,$4,$5,$6,$7,'paid',NOW(),$8,$9)
+                           amount_tendered, change_given, staff, payment_status, fulfilled_at, fulfilment, session_id,
+                           discount_type, discount_value, discount_amount, discount_reason, discount_approved_by)
+       VALUES ($1,'instore','completed',$2,$3,$4,$5,$6,$7,'paid',NOW(),$8,$9,$10,$11,$12,$13,$14)
        RETURNING id, created_at`,
-      [shopId, subtotal, total, paymentMethod, tendered, change, staff, fulfilment, sessionId]
+      [shopId, subtotal, total, paymentMethod, tendered, change, staff, fulfilment, sessionId,
+       basketDisc?.type || null, basketDisc?.value ?? null, discountAmount, basketDisc?.reason || null, approvedBy]
     );
     const orderId = orderRes.rows[0].id;
 
     for (const ln of lines) {
       await client.query(
         `INSERT INTO order_items (order_id, product_id, name_snapshot, price_snapshot, qty, line_total,
-                                  options_snapshot, options_total)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+                                  options_snapshot, options_total, discount_type, discount_value, discount_amount, discount_reason)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
         [orderId, ln.product.id, ln.product.name, ln.product.price, ln.qty, ln.lineTotal,
-         ln.snapshot ? JSON.stringify(ln.snapshot) : null, ln.optionsTotal]
+         ln.snapshot ? JSON.stringify(ln.snapshot) : null, ln.optionsTotal,
+         ln.disc?.type || null, ln.disc?.value ?? null, ln.disc?.amount || 0, ln.disc?.reason || null]
       );
       if (!ln.product.track_stock) continue;
       await client.query(
@@ -1973,14 +2054,18 @@ app.post('/api/sales', requireAuth, async (req, res) => {
       amount_tendered: tendered,
       change_given: change,
       created_at: orderRes.rows[0].created_at,
+      discount: basketDisc ? { ...basketDisc } : null,
+      discount_amount: discountAmount,
+      discount_approved_by: approvedBy,
       items: lines.map((l) => ({
-        name: l.product.name, qty: l.qty, line_total: l.lineTotal,
+        name: l.product.name, qty: l.qty, line_total: l.lineTotal, gross: l.gross,
         options: l.snapshot || [], options_total: l.optionsTotal,
+        discount: l.disc ? { ...l.disc } : null,
       })),
     });
   } catch (err) {
     await client.query('ROLLBACK');
-    if (err.httpStatus) return res.status(err.httpStatus).json({ error: err.message });
+    if (err.httpStatus) return res.status(err.httpStatus).json({ error: err.message, code: err.code || undefined });
     console.error('[sales POST]', err.message);
     res.status(500).json({ error: 'Failed to record sale' });
   } finally {
@@ -2313,7 +2398,8 @@ app.get('/api/admin/orders/:id', requireAuth, async (req, res) => {
     );
     if (!rows[0]) return res.status(404).json({ error: 'Order not found' });
     const { rows: items } = await pool.query(
-      `SELECT name_snapshot, price_snapshot, qty, line_total, options_snapshot, options_total
+      `SELECT name_snapshot, price_snapshot, qty, line_total, options_snapshot, options_total,
+              discount_type, discount_value, discount_amount, discount_reason
        FROM order_items WHERE order_id = $1`,
       [req.params.id]
     );
@@ -2603,6 +2689,11 @@ async function sessionSummary(shopId, session) {
     `SELECT COALESCE(SUM(oi.qty),0)::int AS qty FROM order_items oi JOIN orders o ON o.id = oi.order_id
      WHERE o.shop_id = $1 AND o.session_id = $2 AND o.payment_status IN ('paid','refunded')`, [shopId, session.id]
   )).rows[0];
+  const discounts = (await pool.query(
+    `SELECT COUNT(*) FILTER (WHERE discount_amount > 0)::int AS count, COALESCE(SUM(discount_amount),0)::numeric AS total
+     FROM orders WHERE shop_id = $1 AND session_id = $2 AND payment_status IN ('paid','refunded')`, [shopId, session.id]
+  )).rows[0];
+  discounts.total = Number(discounts.total);
   const online = (await pool.query(
     `SELECT COUNT(*)::int AS count, COALESCE(SUM(total),0)::numeric AS gross FROM orders
      WHERE shop_id = $1 AND channel <> 'instore' AND payment_status = 'paid' AND created_at >= $2 AND created_at <= $3`, win
@@ -2619,7 +2710,7 @@ async function sessionSummary(shopId, session) {
     float_amount: Number(session.float_amount),
     sales: { count: sales.reduce((a, r) => a + r.count, 0), gross: +gross.toFixed(2), cash: +cashSales.toFixed(2), card: +cardSales.toFixed(2), items: items.qty },
     refunds: { count: refunds.reduce((a, r) => a + r.count, 0), total: +refundTotal.toFixed(2), cash: +cashRefunds.toFixed(2), card: +cardRefunds.toFixed(2) },
-    discounts: { count: 0, total: 0 }, // SIAMSHOP-DISCOUNT-001 fills this in
+    discounts: discounts,
     net: +(gross - refundTotal).toFixed(2),
     online: { count: online.count, gross: Number(online.gross) },
     expected_cash: expectedCash,
@@ -2688,15 +2779,22 @@ app.put('/api/till/session/float', requireAuth, async (req, res) => {
   }
 });
 // Close = cash-up. Manager or owner only. Snapshots the Z onto the session.
-app.post('/api/till/session/close', requireAuth, requireManager, async (req, res) => {
+app.post('/api/till/session/close', requireAuth, async (req, res) => {
   try {
     const shopId = await resolveShopId(req);
     if (!shopId) return res.status(404).json({ error: 'Shop not found' });
+    // Manager/owner, or a cashier carrying a one-off manager approval token.
+    let closedBy = req.auth?.name || 'Owner';
+    if (req.auth?.role !== 'manager' && req.auth?.role !== 'admin') {
+      if (!req.body?.approval_token) return res.status(403).json({ error: 'Manager approval required to close the till', code: 'approval_required' });
+      try { closedBy = `${consumeApproval(req.body.approval_token, shopId).name} (for ${req.auth?.name || 'cashier'})`; }
+      catch (e) { return res.status(e.httpStatus || 403).json({ error: e.message }); }
+    }
     const counted = Number(req.body?.counted_cash);
     if (!Number.isFinite(counted) || counted < 0) return res.status(400).json({ error: 'Enter the cash counted in the drawer (£)' });
     const s = await openSession(shopId);
     if (!s) return res.status(409).json({ error: 'No till session is open' });
-    const closing = { ...s, closed_at: new Date(), closed_by: req.auth?.name || 'Owner', counted_cash: counted };
+    const closing = { ...s, closed_at: new Date(), closed_by: closedBy, counted_cash: counted };
     const summary = await sessionSummary(shopId, closing);
     summary.counted_cash = +counted.toFixed(2);
     summary.variance = +(counted - summary.expected_cash).toFixed(2);
@@ -2745,6 +2843,30 @@ app.get('/api/till/sessions/:id', requireAuth, async (req, res) => {
     res.status(500).json({ error: 'Failed to load Z report' });
   }
 });
+
+// Discount settings (SIAMSHOP-DISCOUNT-001) with defaults.
+const DEFAULT_DISCOUNT_REASONS = ['Damaged', 'Near date', 'Staff', 'Manager goodwill', 'Price match'];
+function discountRules(settings) {
+  const reasons = String(settings.discount_reasons || '').split(/[,\n]/).map((x) => x.trim()).filter(Boolean);
+  return {
+    reasons: reasons.length ? reasons : DEFAULT_DISCOUNT_REASONS,
+    thresholdAmount: Number.isFinite(Number(settings.discount_pin_threshold_amount)) && settings.discount_pin_threshold_amount !== '' ? Number(settings.discount_pin_threshold_amount) : 10,
+    thresholdPercent: Number.isFinite(Number(settings.discount_pin_threshold_percent)) && settings.discount_pin_threshold_percent !== '' ? Number(settings.discount_pin_threshold_percent) : 20,
+  };
+}
+// Validate a discount spec { type: percent|fixed, value, reason } against a base amount.
+// Returns { type, value, reason, amount } or null when absent; throws 400 when malformed.
+function applyDiscount(spec, base, rules, what) {
+  if (!spec || spec.type == null) return null;
+  const type = spec.type === 'percent' ? 'percent' : spec.type === 'fixed' ? 'fixed' : null;
+  const value = Number(spec.value);
+  if (!type || !Number.isFinite(value) || value <= 0) throw httpError(400, `${what}: discount needs a type (percent/fixed) and a positive value`);
+  if (type === 'percent' && value > 100) throw httpError(400, `${what}: percent discount cannot exceed 100`);
+  const reason = String(spec.reason || '').trim();
+  if (!reason || !rules.reasons.includes(reason)) throw httpError(400, `${what}: pick a discount reason (${rules.reasons.join(', ')})`);
+  const amount = type === 'percent' ? +(base * value / 100).toFixed(2) : +Math.min(value, base).toFixed(2);
+  return { type, value: +value.toFixed(2), reason, amount };
+}
 
 // Prep screen feed (SIAMSHOP-505): orders from the last 12h that contain at
 // least one made-to-order (kind='food') line, are paid (or till sales), not
@@ -2994,7 +3116,24 @@ app.get('/api/admin/report', requireAuth, async (req, res) => {
        WHERE ${WHERE} GROUP BY oi.name_snapshot ORDER BY revenue DESC LIMIT 15`, args
     )).rows;
 
+    // Discounts (SIAMSHOP-DISCOUNT-001): line + basket, by reason and by staff.
+    const discountsByReason = (await pool.query(
+      `SELECT reason, SUM(cnt)::int AS count, COALESCE(SUM(amount),0)::numeric AS amount FROM (
+         SELECT o.discount_reason AS reason, 1 AS cnt, o.discount_amount - COALESCE((SELECT SUM(oi.discount_amount) FROM order_items oi WHERE oi.order_id = o.id),0) AS amount
+           FROM orders o WHERE ${WHERE} AND o.discount_reason IS NOT NULL
+         UNION ALL
+         SELECT oi.discount_reason, 1, oi.discount_amount FROM order_items oi JOIN orders o ON o.id = oi.order_id
+           WHERE ${WHERE} AND oi.discount_reason IS NOT NULL
+       ) d GROUP BY reason ORDER BY amount DESC`, args
+    )).rows;
+    const discountsByStaff = (await pool.query(
+      `SELECT COALESCE(o.staff,'—') AS staff, COUNT(*)::int AS count, COALESCE(SUM(o.discount_amount),0)::numeric AS amount
+       FROM orders o WHERE ${WHERE} AND o.discount_amount > 0 GROUP BY o.staff ORDER BY amount DESC`, args
+    )).rows;
+    const discountTotal = (await pool.query(`SELECT COALESCE(SUM(o.discount_amount),0)::numeric AS amount FROM orders o WHERE ${WHERE}`, args)).rows[0];
+
     res.json({
+      discounts: { total: Number(discountTotal.amount), by_reason: discountsByReason, by_staff: discountsByStaff },
       from: range.from_date,
       to: range.to_date,
       totals: {

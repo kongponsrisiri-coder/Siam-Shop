@@ -97,6 +97,8 @@ export const api = {
   // Staff PIN sign-in + management (SIAMSHOP-ELECTRON-001)
   staffLogin: (pin) => request('/api/staff/login', { method: 'POST', body: { pin } }),
   staffMe: () => request('/api/staff/me', { authed: true }),
+  // One-off manager approval (60 s, single use) — SIAMSHOP-DISCOUNT-001
+  staffApprove: (body) => request('/api/staff/approve', { method: 'POST', body }),
   adminListStaff: () => request('/api/admin/staff', { authed: true }),
   adminCreateStaff: (s) => request('/api/admin/staff', { method: 'POST', body: s, authed: true }),
   adminUpdateStaff: (id, s) => request(`/api/admin/staff/${id}`, { method: 'PUT', body: s, authed: true }),
@@ -201,7 +203,7 @@ export const api = {
   tillSession: () => request('/api/till/session', { authed: true }),
   tillOpen: (float_amount) => request('/api/till/session/open', { method: 'POST', body: { float_amount }, authed: true }),
   tillSetFloat: (float_amount) => request('/api/till/session/float', { method: 'PUT', body: { float_amount }, authed: true }),
-  tillClose: (counted_cash, notes, token) => request('/api/till/session/close', { method: 'POST', body: { counted_cash, notes }, authed: true, token }),
+  tillClose: (counted_cash, notes, approval_token) => request('/api/till/session/close', { method: 'POST', body: { counted_cash, notes, approval_token }, authed: true }),
   tillSessions: () => request('/api/till/sessions', { authed: true }),
   tillSessionDetail: (id) => request(`/api/till/sessions/${id}`, { authed: true }),
 

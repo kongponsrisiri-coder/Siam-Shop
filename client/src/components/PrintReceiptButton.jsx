@@ -17,9 +17,13 @@ export default function PrintReceiptButton({ order, settings }) {
       orderId: order.id, staff: order.staff || '', createdAt: order.created_at, fulfilment: order.fulfilment,
       items: (order.items || []).map((it) => ({
         name: it.name_snapshot, qty: it.qty, line_total: it.line_total,
+        gross: +(it.qty * (Number(it.price_snapshot) + Number(it.options_total || 0))).toFixed(2),
         unit_price: Number(it.price_snapshot) + Number(it.options_total || 0),
         options: (it.options_snapshot || []).map((o) => o.name),
+        discount: Number(it.discount_amount) > 0 ? { type: it.discount_type, value: it.discount_value, reason: it.discount_reason, amount: Number(it.discount_amount) } : null,
       })),
+      discount: order.discount_reason ? { type: order.discount_type, value: order.discount_value, reason: order.discount_reason, amount: Number(order.discount_amount) - (order.items || []).reduce((a, it) => a + Number(it.discount_amount || 0), 0) } : null,
+      discount_amount: Number(order.discount_amount || 0),
       subtotal: order.subtotal, total: order.total,
       payment_method: order.payment_method, amount_tendered: order.amount_tendered, change_given: order.change_given,
     });

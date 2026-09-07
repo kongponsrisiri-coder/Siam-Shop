@@ -131,6 +131,9 @@ export default function SettingsSection() {
       patch.collection_address = form.collection_address ?? '';
       patch.pickup_lead_minutes = String(Number(form.pickup_lead_minutes) || 20);
       patch.pickup_slot_minutes = String(Number(form.pickup_slot_minutes) || 15);
+      patch.discount_reasons = form.discount_reasons ?? '';
+      patch.discount_pin_threshold_amount = form.discount_pin_threshold_amount ?? '';
+      patch.discount_pin_threshold_percent = form.discount_pin_threshold_percent ?? '';
       patch.receipt_header = form.receipt_header ?? '';
       patch.receipt_footer = form.receipt_footer ?? '';
       patch.vat_number = form.vat_number ?? '';
@@ -209,6 +212,23 @@ export default function SettingsSection() {
               </div>
             </div>
             <pre className="receipt-preview" style={{ flex: '0 0 auto' }}>{receiptPreview({ shopName: shop?.name || 'SiamShop', header: form.receipt_header, footer: form.receipt_footer, vatNumber: form.vat_number })}</pre>
+          </div>
+
+          <h3 style={{ marginTop: 20 }}>Discounts</h3>
+          <p className="muted" style={{ marginTop: 0, fontSize: 13 }}>Cashiers can give discounts up to these limits; above them a manager taps their PIN on the till.</p>
+          <div className="row" style={{ gap: 12, flexWrap: 'wrap' }}>
+            <div style={{ flex: '1 1 100%' }}>
+              <label>Reasons (comma separated)</label>
+              <input value={form.discount_reasons ?? ''} onChange={(e) => set('discount_reasons', e.target.value)} placeholder="Damaged, Near date, Staff, Manager goodwill, Price match" />
+            </div>
+            <div style={{ flex: '1 1 160px' }}>
+              <label>Manager PIN above (£ off per sale)</label>
+              <input type="number" step="0.01" min="0" value={form.discount_pin_threshold_amount ?? ''} onChange={(e) => set('discount_pin_threshold_amount', e.target.value)} placeholder="10" />
+            </div>
+            <div style={{ flex: '1 1 160px' }}>
+              <label>Manager PIN above (% on a line or basket)</label>
+              <input type="number" step="1" min="0" max="100" value={form.discount_pin_threshold_percent ?? ''} onChange={(e) => set('discount_pin_threshold_percent', e.target.value)} placeholder="20" />
+            </div>
           </div>
 
           <h3 style={{ marginTop: 20 }}>Opening hours</h3>

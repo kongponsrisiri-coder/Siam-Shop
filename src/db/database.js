@@ -325,6 +325,17 @@ async function initDB() {
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_clock_events_staff_at ON clock_events(staff_id, event_at DESC)`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_clock_events_shop_at ON clock_events(shop_id, event_at)`);
 
+    // SIAMSHOP-DISCOUNT-001 — line + basket discounts with a reason (server-priced).
+    await pool.query(`ALTER TABLE order_items ADD COLUMN IF NOT EXISTS discount_type VARCHAR(10)`); // percent | fixed
+    await pool.query(`ALTER TABLE order_items ADD COLUMN IF NOT EXISTS discount_value NUMERIC(10,2)`);
+    await pool.query(`ALTER TABLE order_items ADD COLUMN IF NOT EXISTS discount_amount NUMERIC(10,2) NOT NULL DEFAULT 0`);
+    await pool.query(`ALTER TABLE order_items ADD COLUMN IF NOT EXISTS discount_reason VARCHAR(80)`);
+    await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS discount_type VARCHAR(10)`);
+    await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS discount_value NUMERIC(10,2)`);
+    await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS discount_amount NUMERIC(10,2) NOT NULL DEFAULT 0`); // basket + line discounts, total £ off
+    await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS discount_reason VARCHAR(80)`);
+    await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS discount_approved_by VARCHAR(120)`);
+
     // Helpful indexes for the hot paths.
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_products_shop ON products(shop_id, is_active)`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_orders_shop ON orders(shop_id, created_at DESC)`);

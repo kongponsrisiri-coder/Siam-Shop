@@ -95,12 +95,20 @@ function buildReceipt(r) {
   const lines = [];
   for (const it of r.items || []) {
     const name = wrap(it.name, NAME_W);
-    lines.push(txt(pad(`${it.qty}x`, QTY_W) + ' ' + pad(name[0], NAME_W) + ' ' + pad(money(it.line_total), PRICE_W, 'right')), lf());
+    // With a line discount, show the gross on the item line and the discount beneath it.
+    const shown = it.discount && Number(it.discount.amount) > 0 && it.gross != null ? it.gross : it.line_total;
+    lines.push(txt(pad(`${it.qty}x`, QTY_W) + ' ' + pad(name[0], NAME_W) + ' ' + pad(money(shown), PRICE_W, 'right')), lf());
     for (const extra of name.slice(1)) lines.push(txt(' '.repeat(QTY_W + 1) + extra), lf());
     const opts = (it.options || []).map((o) => (typeof o === 'string' ? o : o.name)).filter(Boolean);
     if (opts.length) wrap(opts.join(', '), NAME_W - 2).forEach((ol, i) => lines.push(txt(' '.repeat(QTY_W + 1) + (i === 0 ? '- ' : '  ') + ol), lf()));
     if (it.qty > 1) lines.push(txt(' '.repeat(QTY_W + 1) + `@ ${money(it.unit_price)} each`), lf());
+    if (it.discount && Number(it.discount.amount) > 0) {
+      const label = `Discount - ${it.discount.reason || ''}`.slice(0, NAME_W);
+      lines.push(txt(' '.repeat(QTY_W + 1) + pad(label, NAME_W) + ' ' + pad('-' + money(it.discount.amount), PRICE_W, 'right')), lf());
+    }
   }
+  const basketDisc = r.discount && Number(r.discount.amount) > 0 ? r.discount : null;
+  const anyDiscount = basketDisc || Number(r.discount_amount) > 0;
   const FULFIL = { dine_in: 'EAT IN', takeaway: 'TAKE AWAY', collection: 'COLLECTION', delivery: 'DELIVERY' };
   const pay = String(r.payment_method || '').toUpperCase();
   return flatten([
@@ -117,7 +125,9 @@ function buildReceipt(r) {
     lines,
     rule(), lf(),
     r.delivery_fee > 0 ? [col2('Subtotal', money(r.subtotal)), lf(), col2('Delivery', money(r.delivery_fee)), lf()] : [],
+    basketDisc ? [col2('Subtotal', money(r.subtotal)), lf(), col2(`Discount - ${basketDisc.reason || ''}`.slice(0, 30), '-' + money(basketDisc.amount)), lf()] : [],
     CMD.BOLD_ON, CMD.SIZE_TALL, col2('TOTAL', money(r.total)), CMD.SIZE_NORMAL, CMD.BOLD_OFF, lf(),
+    anyDiscount ? [txt(`You saved ${money(r.discount_amount || basketDisc.amount)}`), lf()] : [],
     col2(`Paid by ${pay || 'CASH'}`, r.amount_tendered != null ? money(r.amount_tendered) : ''), lf(),
     r.change_given != null ? [col2('Change', money(r.change_given)), lf()] : [],
     rule(), lf(),

@@ -3,8 +3,9 @@ import { api } from '../api.js';
 
 // Manager approval (SIAMSHOP-TILL-001, reused by discounts/refunds): a manager
 // types their PIN on a React modal (window.prompt is dead in Electron). The
-// cashier stays signed in — the manager's one-off token is handed back to the
-// caller for that single request. Owner password also works.
+// cashier stays signed in — the manager's one-off APPROVAL token (60 s, single
+// use, server-enforced) is handed back to the caller for that one request.
+// Owner password also works.
 const KEYS = ['1', '2', '3', '4', '5', '6', '7', '8', '9', 'C', '0', '⌫'];
 
 export default function ManagerPin({ title = 'Manager approval', reason, onApproved, onClose }) {
@@ -19,8 +20,7 @@ export default function ManagerPin({ title = 'Manager approval', reason, onAppro
     setBusy(true);
     setError('');
     try {
-      const r = await api.staffLogin(value);
-      if (r.role !== 'manager' && r.role !== 'admin') { setError('That PIN is not a manager.'); setPin(''); return; }
+      const r = await api.staffApprove({ pin: value }); // 60 s, single-use approval token
       onApproved({ token: r.token, name: r.name, role: r.role });
     } catch (e) {
       setError(e.message);
@@ -53,8 +53,8 @@ export default function ManagerPin({ title = 'Manager approval', reason, onAppro
     setBusy(true);
     setError('');
     try {
-      const { token } = await api.login(password);
-      onApproved({ token, name: 'Owner', role: 'admin' });
+      const r = await api.staffApprove({ password });
+      onApproved({ token: r.token, name: r.name, role: r.role });
     } catch (err) {
       setError(err.message);
     } finally {
