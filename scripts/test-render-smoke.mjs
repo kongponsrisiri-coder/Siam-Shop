@@ -63,7 +63,7 @@ const ROUTES = [
   { hash: '#/till', authed: true, expect: /Scan barcode|till-scan/, forbid: /Enter your PIN/ },
   { hash: '#/prep', authed: true, forbid: /Enter your PIN/ },
   { hash: '#/scan', authed: true },
-  ...['dashboard', 'reports', 'products', 'categories', 'orders', 'customers', 'staff', 'settings', 'device'].map((t) => ({ hash: `#/admin?tab=${t}`, authed: true, forbid: /Enter your PIN|Manager or owner only/ })),
+  ...['dashboard', 'reports', 'products', 'categories', 'orders', 'customers', 'campaigns', 'staff', 'settings', 'device'].map((t) => ({ hash: `#/admin?tab=${t}`, authed: true, forbid: /Enter your PIN|Manager or owner only/ })),
 ];
 // Minimal JSON the screens need to draw with an empty shop. Anything not
 // listed gets [] — a screen that crashes on empty data is a real bug.
@@ -82,6 +82,9 @@ const FAKE_API = {
   '/api/prep': { orders: [] },
   '/api/admin/dashboard': { counts: { products: 0, orders: 0, customers: 0, low_stock: 0, pending: 0, active_products: 0, out_of_stock: 0 }, sales: { day: { gross: 0, count: 0 }, week: { gross: 0, count: 0 }, month: { gross: 0, count: 0 }, all: { gross: 0, count: 0 } }, sales_7d: [], top_products: [], by_channel: [], low_stock: [], recent_orders: [] },
   '/api/refund-reasons': { refund: [], void: [], restock: [] },
+  '/api/admin/campaigns/segments': { lapsed_days: 45, total: 0, eligible: 0, segments: [{ id: 'all', label: 'All consented', count: 0 }], categories: [], cap: { daily: 300, sent_today: 0, remaining: 300 } },
+  '/api/admin/campaigns/recipient-count': { count: 0, cap: 300, sent_today: 0, remaining: 300 },
+  '/api/admin/automations': { lapsed_days: 45, brevo_daily_cap: 300, automations: { lapsed: { enabled: false, subject: 's', body: 'b' }, review: { enabled: false, subject: 's', body: 'b' }, birthday: { enabled: false, subject: 's', body: 'b' } }, recent: [], defaults: {} },
   '/api/pickup-slots': { asap: true, slots: [] },
   '/api/clock/status': { clocked_in: [] },
 };
