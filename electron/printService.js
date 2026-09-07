@@ -83,7 +83,7 @@ function wrap(s, width) {
 }
 
 // ── Receipt (grocery + counter) ───────────────────────────────────────────────
-// receipt = { shopName, address, orderId, staff, createdAt, fulfilment,
+// receipt = { shopName, header (multi-line, e.g. address/phone), orderId, staff, createdAt, fulfilment,
 //             items: [{ name, qty, unit_price, line_total, options: [names] }],
 //             subtotal, total, payment_method, amount_tendered, change_given,
 //             footer, vatNote }
@@ -107,7 +107,7 @@ function buildReceipt(r) {
     CMD.INIT,
     CMD.ALIGN_CENTER,
     CMD.BOLD_ON, CMD.SIZE_BIG, txt(String(r.shopName || 'SiamShop').slice(0, 20)), CMD.SIZE_NORMAL, CMD.BOLD_OFF, lf(),
-    r.address ? wrap(r.address, LINE_WIDTH).map((l) => [txt(l), lf()]) : [],
+    (r.header || r.address) ? String(r.header || r.address).split(/\r?\n/).flatMap((line) => wrap(line, LINE_WIDTH).map((l) => [txt(l), lf()])) : [],
     lf(),
     CMD.ALIGN_LEFT,
     col2(`Receipt #${r.orderId}`, dateStr), lf(),

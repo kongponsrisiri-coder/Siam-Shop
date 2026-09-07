@@ -159,8 +159,9 @@ ipcMain.handle('siamshop:reset-config', async () => {
 function printerCfg() { return rendererConfig().printer; }
 ipcMain.handle('siamshop:print-receipt', async (event, payload) => {
   try {
-    await printService.printReceipt(printerCfg(), payload || {});
-    return { ok: true };
+    const copies = Math.min(3, Math.max(1, parseInt(payload?.copies, 10) || 1));
+    for (let i = 0; i < copies; i++) await printService.printReceipt(printerCfg(), payload || {});
+    return { ok: true, copies };
   } catch (e) {
     console.error('[print] receipt failed:', e.message);
     return { ok: false, error: e.message };
