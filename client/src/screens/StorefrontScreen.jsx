@@ -205,7 +205,7 @@ export default function StorefrontScreen() {
         >
           {t('all')}
         </button>
-        {categories.map((c) => (
+        {categories.filter((c) => c.product_count !== 0).map((c) => (
           <button
             key={c.id}
             className={`cat-tab ${String(categoryId) === String(c.id) ? 'active' : ''}`}

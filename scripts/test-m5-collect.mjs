@@ -181,6 +181,24 @@ r = await req('POST', '/api/orders', { items: [{ product_id: rice.id, qty: 10 }]
 check('delivery over the minimum → 201', r.status === 201, r.data);
 await req('PUT', '/api/admin/settings', { minimum_order_amount: '0' });
 
+console.log('— empty categories are not offered to shoppers');
+// An imported shop is left with the seed's categories sitting empty beside the
+// real ones; tapping one just said "No products found" (Korakot, 8 Sep). The
+// count lets the storefront and the till drop them; Admin still lists them.
+{
+  const bare = (await req('POST', '/api/admin/categories', { name: 'Nothing In Here' })).data;
+  const list = (await req('GET', '/api/categories', null, false)).data;
+  const empty = list.find((c) => c.id === bare.id);
+  const full = list.find((c) => c.id === alwaysCat.id);
+  check('a category with no products reports 0', empty && empty.product_count === 0, empty);
+  check('a category with products reports how many', full && full.product_count > 0, full);
+  const p = (await req('POST', '/api/admin/products', { name: 'Fills The Empty One', price: 1, category_id: bare.id })).data;
+  check('adding a product makes it count', (await req('GET', '/api/categories', null, false)).data.find((c) => c.id === bare.id).product_count === 1);
+  await req('PUT', `/api/admin/products/${p.id}`, { ...p, is_active: false });
+  check('deactivating the product empties it again — inactive stock is not on sale',
+    (await req('GET', '/api/categories', null, false)).data.find((c) => c.id === bare.id).product_count === 0);
+}
+
 console.log('— categories: clearing availability');
 r = await req('PUT', `/api/admin/categories/${lunchCat.data.id}`, { availability: null });
 check('PUT availability null → always', r.status === 200 && r.data.availability == null, r.data);
