@@ -9,3 +9,4 @@ client/dist/
 *.xlsx
 scripts/products.json
 client/dist-electron/
+client/.smoke-profile/

@@ -5,6 +5,7 @@ import App from './App.jsx';
 import { CartProvider } from './cart.jsx';
 import { LangProvider } from './lang.jsx';
 import { isElectron } from './electron.js';
+import ErrorBoundary from './ErrorBoundary.jsx';
 import './styles.css';
 
 // Desktop till loads the bundle from file:// (SIAMSHOP-ELECTRON-001), where
@@ -13,12 +14,14 @@ const Router = isElectron ? HashRouter : BrowserRouter;
 
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
-    <Router>
-      <LangProvider>
-        <CartProvider>
-          <App />
-        </CartProvider>
-      </LangProvider>
-    </Router>
+    <ErrorBoundary>
+      <Router>
+        <LangProvider>
+          <CartProvider>
+            <App />
+          </CartProvider>
+        </LangProvider>
+      </Router>
+    </ErrorBoundary>
   </React.StrictMode>
 );

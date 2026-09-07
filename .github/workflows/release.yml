@@ -35,6 +35,20 @@ jobs:
             echo "::error::Tag v$TAG does not match electron/package.json version $PKG — bump the version before tagging."
             exit 1
           fi
+      # HOTFIX 0.1.2: v0.1.1 shipped a blank Till (render-time ReferenceError) with
+      # every API test green. Build the Electron client and RENDER every staff
+      # route in headless Chrome before any installer is built — a blank build
+      # can never tag again.
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: npm
+      - name: Install dependencies
+        run: |
+          npm install
+          cd client && npm install
+      - name: Render smoke test (headless Chrome)
+        run: node scripts/test-render-smoke.mjs
 
   build-mac:
     needs: verify-version

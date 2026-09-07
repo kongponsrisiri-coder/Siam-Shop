@@ -53,6 +53,17 @@ export default function TillScreen() {
   const [receipt, setReceipt] = useState(null);
   const [summary, setSummary] = useState(null);
   const [busy, setBusy] = useState(false);
+  // HOTFIX 0.1.2: every useState lives ABOVE the useMemo maths block. A4 put
+  // basketDiscount below it → TDZ ReferenceError on first render → blank window.
+  const [printMsg, setPrintMsg] = useState('');
+  const [lastSale, setLastSale] = useState(null); // SIAMSHOP-RECEIPT-001: reprint last receipt
+  // Discounts (SIAMSHOP-DISCOUNT-001): per line (basket[i].discount) + basket-level.
+  const [basketDiscount, setBasketDiscount] = useState(null); // { type, value, reason, amount }
+  const [discountModal, setDiscountModal] = useState(null); // { key } | 'basket' | null
+  const [approval, setApproval] = useState(null); // pending sale awaiting manager approval
+  const [shopSettings, setShopSettings] = useState(null);
+  useEffect(() => { if (authed) api.getSettings().then(setShopSettings).catch(() => {}); }, [authed]);
+  const [voiding, setVoiding] = useState(null); // basket line awaiting a void reason (SIAMSHOP-REFUND-001)
   const scanRef = useRef(null);
 
   // Auth check on mount
@@ -155,7 +166,6 @@ export default function TillScreen() {
   function setQty(key, qty) {
     setBasket((prev) => prev.map((i) => (i.key === key ? { ...i, qty: Math.max(1, qty) } : i)));
   }
-  const [voiding, setVoiding] = useState(null); // basket line awaiting a void reason (SIAMSHOP-REFUND-001)
   function removeLine(key) {
     const line = basket.find((i) => i.key === key);
     if (line) setVoiding(line); else setBasket((prev) => prev.filter((i) => i.key !== key));
@@ -239,14 +249,6 @@ export default function TillScreen() {
     }
   }
 
-  const [printMsg, setPrintMsg] = useState('');
-  const [lastSale, setLastSale] = useState(null); // SIAMSHOP-RECEIPT-001: reprint last receipt
-  // Discounts (SIAMSHOP-DISCOUNT-001): per line (basket[i].discount) + basket-level.
-  const [basketDiscount, setBasketDiscount] = useState(null); // { type, value, reason, amount }
-  const [discountModal, setDiscountModal] = useState(null); // { key } | 'basket' | null
-  const [approval, setApproval] = useState(null); // pending sale awaiting manager approval
-  const [shopSettings, setShopSettings] = useState(null);
-  useEffect(() => { if (authed) api.getSettings().then(setShopSettings).catch(() => {}); }, [authed]);
   async function printReceipt(sale, { copies } = {}) {
     setPrintMsg('Printing…');
     const st = shopSettings || {};
