@@ -21,6 +21,26 @@ const printerScan = require('./printerScan');
 const raster = require('./raster');
 
 const PROJECT_ROOT = path.resolve(__dirname, '..');
+
+// `SiamShop --self-test` (HOTFIX v0.1.7): the release workflow launches the PACKAGED
+// app with this flag. It loads every main-process module, checks the client
+// bundle is inside the package, prints SELFTEST OK and exits 0 — no window. A
+// missing module in app.asar (v0.1.5/v0.1.6 crashed on launch) fails the build.
+if (process.argv.includes('--self-test')) {
+  try {
+    for (const m of ['./printService', './printerScan', './raster']) require(m);
+    require.resolve('./preload');
+    const idx = app.isPackaged ? path.join(process.resourcesPath, 'client-dist', 'index.html') : path.join(PROJECT_ROOT, 'client', 'dist-electron', 'index.html');
+    if (!fs.existsSync(idx)) throw new Error('client index missing: ' + idx);
+    const html = fs.readFileSync(idx, 'utf8');
+    if (!/<script type="module"[^>]+src="\.\/assets\/index-[^"]+\.js"/.test(html)) throw new Error('client index has no bundle script');
+    console.log(`SELFTEST OK ${app.getVersion()} packaged=${app.isPackaged}`);
+    app.exit(0);
+  } catch (e) {
+    console.error('SELFTEST FAIL ' + (e && e.stack || e));
+    app.exit(2);
+  }
+}
 const DEV_URL = 'http://localhost:5173';
 const APP_ID = 'uk.co.siamepos.shop';
 const APP_ICON_PATH = path.join(__dirname, 'build', 'icon.png');

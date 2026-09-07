@@ -79,6 +79,17 @@ jobs:
           p12-password:    ${{ secrets.MAC_CERT_PASSWORD }}
       - name: Build Mac DMG + ZIP
         run: cd electron && npm run build:mac
+      # HOTFIX v0.1.7 — the PACKAGED app must contain every main-process module and
+      # launch. v0.1.5/v0.1.6 shipped without raster.js/printerScan.js and died on
+      # start; the renderer smoke cannot see that.
+      - name: Packaged-app check (asar modules + --self-test launch)
+        run: |
+          ASAR=$(find electron/dist-electron -type f -name app.asar -path '*SiamShop.app*' | head -1)
+          echo "asar: $ASAR"; test -n "$ASAR"
+          node scripts/check-asar.mjs "$ASAR"
+          BIN=$(find electron/dist-electron -type f -name SiamShop -path '*Contents/MacOS/*' | head -1)
+          echo "binary: $BIN"; test -n "$BIN"
+          OUT=$("$BIN" --self-test 2>&1 | tee /dev/stderr) ; echo "$OUT" | grep -q "SELFTEST OK"
         env:
           CSC_LINK:                    ${{ secrets.MAC_CERT_P12_BASE64 }}
           CSC_KEY_PASSWORD:            ${{ secrets.MAC_CERT_PASSWORD }}
@@ -121,6 +132,14 @@ jobs:
       # Unsigned on purpose (no Windows code-signing cert yet — SmartScreen warns; see electron/README.md).
       - name: Build Windows installer
         run: cd electron && npm run build:win
+      - name: Packaged-app check (asar modules + --self-test launch)
+        shell: pwsh
+        run: |
+          node scripts/check-asar.mjs electron/dist-electron/win-unpacked/resources/app.asar
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          $out = & "electron\dist-electron\win-unpacked\SiamShop.exe" --self-test 2>&1 | Out-String
+          Write-Host $out
+          if ($out -notmatch "SELFTEST OK") { Write-Error "self-test failed"; exit 1 }
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Show build output
