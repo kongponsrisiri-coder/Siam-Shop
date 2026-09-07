@@ -2,6 +2,15 @@ import React, { useState } from 'react';
 import { api, staffSession } from '../api.js';
 import { isElectron, desktop, electronConfig } from '../electron.js';
 import { loadPrinters } from '../printers.js';
+
+// How this shop prints (SIAMSHOP-PRINT-RENDER-001): drawn with a real typeface
+// by default, or the printer's own font when the shop chose 'classic'.
+async function printOpts() {
+  try {
+    const st = await api.getSettings();
+    return { style: st.receipt_style || 'rendered', size: st.print_size || 'normal', logo: st.brand_logo || '', showLogo: !!st.receipt_show_logo, logoInvert: !!st.brand_logo_invert };
+  } catch { return { style: 'rendered', size: 'normal' }; }
+}
 import ManagerPin from './ManagerPin.jsx';
 
 // Till session UI (SIAMSHOP-TILL-001): open the till with a float, close it
@@ -85,7 +94,7 @@ export function PrintZButton({ z, label = '🖨 Print Z' }) {
   if (!isElectron) return null;
   return (
     <span className="row" style={{ gap: 8, alignItems: 'center', display: 'inline-flex' }}>
-      <button className="btn secondary" onClick={async () => { setMsg('Printing…'); const r = await desktop.printZ(z, electronConfig.shopName, (await loadPrinters().catch(() => null))?.receiptDest); setMsg(r?.ok ? 'Printed' : `Print failed: ${r?.error}`); }}>{label}</button>
+      <button className="btn secondary" onClick={async () => { setMsg('Printing…'); const r = await desktop.printZ(z, electronConfig.shopName, (await loadPrinters().catch(() => null))?.receiptDest, await printOpts()); setMsg(r?.ok ? 'Printed' : `Print failed: ${r?.error}`); }}>{label}</button>
       {msg && <span className="muted" style={{ fontSize: 12 }}>{msg}</span>}
     </span>
   );
@@ -107,7 +116,7 @@ export function CloseTillModal({ summary, onClosed, onClose }) {
     try {
       const r = await api.tillClose(Number(counted), notes, approvalToken);
       setResult(r.summary);
-      if (isElectron && electronConfig.printer?.autoPrint !== false) loadPrinters().catch(() => null).then((p) => desktop.printZ(r.summary, electronConfig.shopName, p?.receiptDest)).catch(() => {});
+      if (isElectron && electronConfig.printer?.autoPrint !== false) Promise.all([loadPrinters().catch(() => null), printOpts()]).then(([p, o]) => desktop.printZ(r.summary, electronConfig.shopName, p?.receiptDest, o)).catch(() => {});
     } catch (e) {
       setError(e.message);
     } finally { setBusy(false); }

@@ -50,6 +50,16 @@ check('receipt + prep printers created', receiptP?.id && prepP?.id && prepP.job 
 r = await req('POST', '/api/admin/printers', { name: 'Label', kind: 'usb', usb_name: 'Rollo X1040', job: 'label', prep_categories: [1] }, mgrTok);
 check('USB label printer; prep_categories ignored for non-prep jobs', r.status === 201 && r.data.kind === 'usb' && r.data.prep_categories.length === 0, r.data);
 const labelP = r.data;
+// 'label' means anything that is not the 80 mm thermal, so it carries a paper size.
+check('label printer defaults to the 4x6 parcel label', labelP.paper === 'label4x6', labelP.paper);
+r = await req('POST', '/api/admin/printers', { name: 'Office A4', kind: 'usb', usb_name: 'HP LaserJet', job: 'label', paper: 'a4' }, mgrTok);
+check('an A4 printer is a valid "other" printer', r.status === 201 && r.data.paper === 'a4', r.data);
+const a4P = r.data;
+r = await req('PUT', `/api/admin/printers/${a4P.id}`, { paper: 'label2x1' }, mgrTok);
+check('paper size can be changed', r.status === 200 && r.data.paper === 'label2x1', r.data.paper);
+r = await req('PUT', `/api/admin/printers/${a4P.id}`, { paper: 'a3-poster' }, mgrTok);
+check('an unknown paper size falls back to the parcel label rather than erroring', r.status === 200 && r.data.paper === 'label4x6', r.data.paper);
+await req('DELETE', `/api/admin/printers/${a4P.id}`, null, mgrTok);
 r = await req('GET', '/api/printers', null, cashTok);
 check('cashier can read the shop list (3 printers)', r.status === 200 && r.data.printers.length === 3 && r.data.printing_device_id === null, r.data);
 r = await req('POST', `/api/printers/${prepP.id}/test-result`, { ok: true }, cashTok);
@@ -63,7 +73,7 @@ check('sale 201 with one prep ticket for the Kitchen printer', r.status === 201 
 r = await req('POST', '/api/sales', { items: [{ product_id: rice.id, qty: 2 }], payment_method: 'card' }, cashTok, { 'X-Device-Id': 'till-1' });
 check('grocery-only sale → no prep ticket', r.status === 201 && r.data.prep_tickets.length === 0, r.data.prep_tickets);
 // The till would now print: receipt (drawer) on A via printService, ticket on B after claiming.
-await ps.printReceipt({ ip: '127.0.0.1', port: 19201 }, { shopName: 'Prn Shop', orderId: sale.id, items: [{ name: 'Prn Pad Thai Box', qty: 1, line_total: 8, unit_price: 8 }, { name: 'Prn Rice 5kg', qty: 1, line_total: 12, unit_price: 12 }], subtotal: 20, total: 20, payment_method: 'cash', amount_tendered: 20, change_given: 0 });
+await ps.printReceipt({ ip: '127.0.0.1', port: 19201 }, { style: 'classic', shopName: 'Prn Shop', orderId: sale.id, items: [{ name: 'Prn Pad Thai Box', qty: 1, line_total: 8, unit_price: 8 }, { name: 'Prn Rice 5kg', qty: 1, line_total: 12, unit_price: 12 }], subtotal: 20, total: 20, payment_method: 'cash', amount_tendered: 20, change_given: 0 });
 await ps.openCashDrawer({ ip: '127.0.0.1', port: 19201 });
 const ticketId = sale.prep_tickets[0].id;
 r = await req('POST', `/api/prep/tickets/${ticketId}/claim`, { device_id: 'till-1' }, cashTok);
@@ -73,7 +83,7 @@ r = await req('POST', `/api/prep/tickets/${ticketId}/claim`, { device_id: 'till-
 check('second till claiming the same ticket → 409', r.status === 409 && r.data.code === 'claimed');
 r = await req('POST', '/api/prep/tickets/999999/claim', { device_id: 'till-2' }, cashTok);
 check('claiming a ticket that does not exist → 404 (Krit)', r.status === 404);
-await ps.printPrepTicket({ ip: '127.0.0.1', port: 19202 }, ticket);
+await ps.printPrepTicket({ ip: '127.0.0.1', port: 19202 }, { ...ticket, style: 'classic' });
 r = await req('POST', `/api/prep/tickets/${ticketId}/ack`, { device_id: 'till-2', ok: true }, cashTok);
 check('ack from a device that did not claim → 409', r.status === 409);
 r = await req('POST', `/api/prep/tickets/${ticketId}/ack`, { device_id: 'till-1', ok: true }, cashTok);
@@ -146,7 +156,7 @@ check('reprint creates a new seq-1 ticket for the order', r.status === 201 && r.
 const rp = (await req('POST', `/api/prep/tickets/${r.data.prep_tickets[0].id}/claim`, { device_id: 'till-2' }, cashTok)).data.ticket;
 check('reprint payload flagged', rp.reprint === true);
 const C = await listen(19203);
-await ps.printPrepTicket({ ip: '127.0.0.1', port: 19203 }, rp);
+await ps.printPrepTicket({ ip: '127.0.0.1', port: 19203 }, { ...rp, style: 'classic' });
 await new Promise((res) => setTimeout(res, 200));
 check('reprinted ticket bytes say REPRINT', /REPRINT/.test(strip(Buffer.concat(C.jobs))));
 r = await req('POST', '/api/prep/tickets/reprint', { order_id: (await req('POST', '/api/sales', { items: [{ product_id: rice.id, qty: 1 }], payment_method: 'cash' }, cashTok)).data.id }, cashTok);

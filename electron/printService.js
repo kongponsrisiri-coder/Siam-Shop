@@ -474,6 +474,35 @@ function sendRaw(ip, port, buf, options = {}) {
   return _printQueue;
 }
 
+// ── Rendered tickets (SIAMSHOP-PRINT-RENDER-001) ──────────────────────────────
+// The default path: the whole ticket is DRAWN with a real typeface and sent as
+// one bitmap, so Thai prints and the logo is composed in. The classic ESC/POS
+// text builders above stay as the per-shop fallback (receipt_style='classic')
+// and take the same payload, so the two can never disagree about a number.
+const ticketRender = require('./ticketRender');
+const isClassic = (o) => String((o && o.style) || 'rendered') === 'classic';
+const renderOpts = (o = {}) => ({ size: o.size || 'normal', logo: o.showLogo ? o.logo : null, invert: !!o.logoInvert });
+// A rendered ticket is INIT + the raster + feed + cut. No drawer pulse: the
+// caller decides that (a prep ticket must never open the till).
+const wrapRaster = (buf) => flatten([CMD.INIT, CMD.ALIGN_CENTER, buf, lf(3), CMD.CUT]);
+
+async function receiptBytes(r) {
+  if (isClassic(r)) return buildReceipt(r);
+  return wrapRaster(await ticketRender.receiptRaster(r, renderOpts(r)));
+}
+async function prepBytes(t) {
+  if (isClassic(t)) return buildPrepTicket(t);
+  return wrapRaster(await ticketRender.prepRaster(t, renderOpts(t)));
+}
+async function zBytes(z, shopName, o = {}) {
+  if (isClassic(o)) return buildZReport(z, shopName);
+  return wrapRaster(await ticketRender.zRaster(z, shopName, renderOpts(o)));
+}
+async function testBytes(info, o = {}) {
+  if (isClassic(o)) return buildTestPage(info);
+  return wrapRaster(await ticketRender.testRaster({ ...info, shopName: o.shopName }, renderOpts(o)));
+}
+
 // ── Public API ────────────────────────────────────────────────────────────────
 function dest(printer = {}) {
   return {
@@ -486,23 +515,23 @@ function dest(printer = {}) {
 }
 async function printReceipt(printer, receipt) {
   const d = dest(printer);
-  await sendRaw(d.ip, d.port, buildReceipt(receipt), { printerName: d.printerName, lprQueue: d.lprQueue, lprPort: d.lprPort });
+  await sendRaw(d.ip, d.port, await receiptBytes(receipt), { printerName: d.printerName, lprQueue: d.lprQueue, lprPort: d.lprPort });
 }
 async function openCashDrawer(printer) {
   const d = dest(printer);
   await sendRaw(d.ip, d.port, CMD.DRAWER_KICK, { printerName: d.printerName, lprQueue: d.lprQueue, lprPort: d.lprPort });
 }
-async function printZReport(printer, z, shopName) {
+async function printZReport(printer, z, shopName, opts) {
   const d = dest(printer);
-  await sendRaw(d.ip, d.port, buildZReport(z, shopName), { printerName: d.printerName, lprQueue: d.lprQueue, lprPort: d.lprPort });
+  await sendRaw(d.ip, d.port, await zBytes(z, shopName, opts), { printerName: d.printerName, lprQueue: d.lprQueue, lprPort: d.lprPort });
 }
 async function printPrepTicket(printer, ticket) {
   const d = dest(printer);
-  await sendRaw(d.ip, d.port, buildPrepTicket(ticket), { printerName: d.printerName, lprQueue: d.lprQueue, lprPort: d.lprPort });
+  await sendRaw(d.ip, d.port, await prepBytes(ticket), { printerName: d.printerName, lprQueue: d.lprQueue, lprPort: d.lprPort });
 }
-async function testPrint(printer) {
+async function testPrint(printer, opts) {
   const d = dest(printer);
-  await sendRaw(d.ip, d.port, buildTestPage({ ip: d.ip, port: d.port, name: d.printerName }), { printerName: d.printerName, lprQueue: d.lprQueue, lprPort: d.lprPort });
+  await sendRaw(d.ip, d.port, await testBytes({ ip: d.ip, port: d.port, name: d.printerName }, opts), { printerName: d.printerName, lprQueue: d.lprQueue, lprPort: d.lprPort });
 }
 
-module.exports = { printReceipt, openCashDrawer, testPrint, printZReport, printPrepTicket, buildReceipt, buildZReport, buildTestPage, buildPrepTicket, findCupsQueueForIp, LINE_WIDTH, CMD, raster: require('./raster') };
+module.exports = { printReceipt, openCashDrawer, testPrint, printZReport, printPrepTicket, receiptBytes, prepBytes, zBytes, testBytes, buildReceipt, buildZReport, buildTestPage, buildPrepTicket, findCupsQueueForIp, LINE_WIDTH, CMD, raster: require('./raster'), render: ticketRender };

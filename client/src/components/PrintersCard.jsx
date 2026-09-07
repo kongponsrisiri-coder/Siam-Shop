@@ -6,7 +6,14 @@ import { printerDest, invalidatePrinters, migrateLegacyPrinters } from '../print
 // Shop-wide printers (SIAMSHOP-PRINTERS-001): every till sees the same list.
 // Add via Find printers / USB list / typed IP · job (receipt · prep · label) ·
 // prep categories · test (this device runs it, reports the result) · remove.
-const JOB_LABEL = { receipt: 'Receipt + drawer', prep: 'Prep ticket', label: 'Parcel label (4×6)' };
+// 'label' covers every printer that is NOT the 80 mm thermal at the till or
+// kitchen — parcel labels, shelf labels, an office A4 — all driven through the
+// computer's own printer driver rather than ESC/POS.
+const JOB_LABEL = { receipt: 'Receipt + drawer (80 mm)', prep: 'Prep ticket (80 mm)', label: 'Other printer' };
+const PAPER_LABEL = {
+  label4x6: '4 × 6 in parcel label', label4x2: '4 × 2 in label', label2x1: '2 × 1 in label',
+  a4: 'A4 paper', a5: 'A5 paper',
+};
 const fmtWhen = (iso) => (iso ? new Date(iso).toLocaleString('en-GB', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : '');
 
 export default function PrintersCard({ onChanged, isManager }) {
@@ -51,13 +58,17 @@ export default function PrintersCard({ onChanged, isManager }) {
     if (p.job === 'label') {
       const { buildLabelHtml, SAMPLE_LABEL } = await import('../label.js');
       r = await desktop.printLabel(await buildLabelHtml(SAMPLE_LABEL), 1, p.usb_name);
-    } else r = await desktop.testPrint(printerDest(p));
+    } else {
+      let o = {};
+      try { const st = await api.getSettings(); o = { style: st.receipt_style || 'rendered', size: st.print_size || 'normal', logo: st.brand_logo || '', showLogo: !!st.receipt_show_logo, logoInvert: !!st.brand_logo_invert, shopName: electronConfig.shopName }; } catch {}
+      r = await desktop.testPrint(printerDest(p), o);
+    }
     await api.printerTestResult(p.id, !!r?.ok).catch(() => {});
     setMsg(r?.ok ? `${p.name}: test sent — check the printer.` : `${p.name}: ${r?.error || 'test failed'}`);
     await load(); setBusy(false);
   }
   async function findPrinters() { setScan({ busy: true }); const r = await desktop.scanPrinters(); setScan({ busy: false, ...r }); }
-  const startAdd = (preset = {}) => setAdding({ name: '', kind: 'network', ip: '', port: 9100, lpr_queue: 'lp', usb_name: '', job: 'receipt', prep_categories: [], model: '', ...preset });
+  const startAdd = (preset = {}) => setAdding({ name: '', kind: 'network', ip: '', port: 9100, lpr_queue: 'lp', usb_name: '', job: 'receipt', prep_categories: [], model: '', paper: 'label4x6', ...preset });
 
   const printers = list?.printers || [];
   return (
@@ -74,6 +85,7 @@ export default function PrintersCard({ onChanged, isManager }) {
                 <div className="device-title">{p.name} <span className="tag">{JOB_LABEL[p.job]}</span>{electronConfig.receiptPrinterId === p.id && <span className="tag ok">this till's receipts</span>}</div>
                 <div className="device-sub">
                   {p.kind === 'usb' ? `USB · ${p.usb_name}` : `${p.ip}${Number(p.port) !== 9100 ? `:${p.port}` : ''}`}{p.model ? ` · ${p.model}` : ''}
+                  {p.job === 'label' && <> · {PAPER_LABEL[p.paper] || p.paper}</>}
                   {p.job === 'prep' && <> · {p.prep_categories?.length ? `categories: ${p.prep_categories.map((id) => cats.find((c) => c.id === id)?.name || id).join(', ')}` : 'all made-to-order items'}</>}
                   {' · '}{p.last_test_at ? `last test ${p.last_test_ok ? 'OK' : 'FAILED'} ${fmtWhen(p.last_test_at)}` : 'not tested'}
                 </div>
@@ -106,7 +118,7 @@ export default function PrintersCard({ onChanged, isManager }) {
             <div style={{ flex: '2 1 200px' }}><label>Name</label><input value={adding.name} onChange={(e) => setAdding({ ...adding, name: e.target.value })} placeholder="e.g. Front till, Kitchen, Label" autoFocus /></div>
             <div style={{ flex: '1 1 160px' }}><label>Job</label>
               <select value={adding.job} onChange={(e) => setAdding({ ...adding, job: e.target.value, kind: e.target.value === 'label' ? 'usb' : adding.kind })}>
-                <option value="receipt">Receipt + drawer</option><option value="prep">Prep ticket (kitchen / counter)</option><option value="label">Parcel label (4×6, USB driver)</option>
+                <option value="receipt">Receipt + drawer — 80 mm thermal</option><option value="prep">Prep ticket — 80 mm thermal at the kitchen / counter</option><option value="label">Anything else — labels, A4, via this computer's driver</option>
               </select></div>
             {adding.job !== 'label' && <div style={{ flex: '1 1 140px' }}><label>Connection</label>
               <select value={adding.kind} onChange={(e) => setAdding({ ...adding, kind: e.target.value })}><option value="network">Network (IP)</option><option value="usb">USB on this computer</option></select></div>}
@@ -122,6 +134,15 @@ export default function PrintersCard({ onChanged, isManager }) {
               <select value={adding.usb_name || ''} onChange={(e) => { const q = osPrinters.find((p) => p.name === e.target.value); setAdding({ ...adding, usb_name: e.target.value, model: q?.model || adding.model, name: adding.name || q?.label || '' }); }}>
                 <option value="">— choose —</option>{osPrinters.map((p) => <option key={p.name} value={p.name}>{p.label || p.displayName}{p.queue && p.queue !== (p.label || p.displayName) ? ` (${p.queue})` : ''}</option>)}
               </select></>
+          )}
+          {adding.job === 'label' && (
+            <>
+              <label>Paper / label size</label>
+              <select value={adding.paper || 'label4x6'} onChange={(e) => setAdding({ ...adding, paper: e.target.value })}>
+                {Object.entries(PAPER_LABEL).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+              </select>
+              <p className="muted" style={{ fontSize: 12, marginTop: 4 }}>Anything that is not the 80 mm till or kitchen printer goes here — parcel labels, shelf labels, or an ordinary A4 printer.</p>
+            </>
           )}
           {adding.job === 'prep' && (
             <><label>Only items from these categories (none ticked = every made-to-order item)</label>

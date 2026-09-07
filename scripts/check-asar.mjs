@@ -26,5 +26,13 @@ for (const f of jsFiles) {
   }
 }
 if (!has('package.json')) { console.log('  ❌ package.json missing from app.asar'); fail++; }
+// The renderer needs its typefaces at runtime; a missing fonts/ dir only shows
+// when someone prints (SIAMSHOP-PRINT-RENDER-001).
+for (const f of ['NotoSans-Regular.ttf', 'NotoSans-Bold.ttf', 'Sarabun-Regular.ttf', 'Sarabun-Bold.ttf']) {
+  if (has(`fonts/${f}`)) console.log(`  ✅ fonts/${f} packaged`);
+  else { console.log(`  ❌ fonts/${f} is NOT in app.asar — rendered tickets would fail`); fail++; }
+}
+if (!listing.some((l) => /node_modules\/pureimage\//.test(l))) { console.log('  ❌ pureimage is NOT in app.asar'); fail++; }
+else console.log('  ✅ pureimage packaged');
 console.log(fail ? `\n❌ app.asar is missing ${fail} module(s) — the app would crash on launch` : `\n✅ app.asar contains every main-process module (${jsFiles.length} files)`);
 process.exit(fail ? 1 : 0);

@@ -15,6 +15,7 @@ export default function PrintReceiptButton({ order, settings }) {
       header: st.receipt_header || '', footer: st.receipt_footer || '',
       vatNote: st.vat_number ? `VAT No. ${st.vat_number}` : '', copies: 1,
       logo: st.brand_logo || '', showLogo: !!st.receipt_show_logo, logoInvert: !!st.brand_logo_invert,
+      style: st.receipt_style || 'rendered', size: st.print_size || 'normal',
       orderId: order.id, staff: order.staff || '', createdAt: order.created_at, fulfilment: order.fulfilment,
       items: (order.items || []).map((it) => ({
         name: it.name_snapshot, qty: it.qty, line_total: it.line_total,

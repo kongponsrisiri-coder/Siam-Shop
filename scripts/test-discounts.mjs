@@ -5,6 +5,8 @@ import net from 'node:net';
 import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const ps = require('../electron/printService.js');
+// These checks read the receipt as text, so they pin the classic (printer-font)
+// path; the rendered picture has its own suite in test-print-render.mjs.
 
 const BASE = process.env.BASE || 'http://localhost:4999';
 const PASS = process.env.ADMIN_PASSWORD || 'test-pass-123';
@@ -94,8 +96,8 @@ check('order stores discount_amount 6.00 + approved_by; item stores type/value/r
 const jobs = [];
 const srv = net.createServer((sock) => { const c = []; sock.on('data', (d) => c.push(d)); sock.on('close', () => jobs.push(Buffer.concat(c))); });
 await new Promise((res) => srv.listen(19140, '127.0.0.1', res));
-await ps.printReceipt({ ip: '127.0.0.1', port: 19140 }, { shopName: 'Test', orderId: s3.id, staff: 'Disc Cashier', items: s3.items.map((it) => ({ name: it.name, qty: it.qty, line_total: it.line_total, gross: it.gross, unit_price: it.gross / it.qty, options: [], discount: it.discount })), discount: s3.discount, discount_amount: s3.discount_amount, subtotal: s3.subtotal, total: s3.total, payment_method: 'cash', amount_tendered: 20, change_given: 6 });
-await ps.printReceipt({ ip: '127.0.0.1', port: 19140 }, { shopName: 'Test', orderId: s2.id, staff: 'Disc Cashier', items: s2.items.map((it) => ({ name: it.name, qty: it.qty, line_total: it.line_total, gross: it.gross, unit_price: it.gross / it.qty, options: [], discount: it.discount })), discount: s2.discount, discount_amount: s2.discount_amount, subtotal: s2.subtotal, total: s2.total, payment_method: 'card' });
+await ps.printReceipt({ ip: '127.0.0.1', port: 19140 }, { style: 'classic', shopName: 'Test', orderId: s3.id, staff: 'Disc Cashier', items: s3.items.map((it) => ({ name: it.name, qty: it.qty, line_total: it.line_total, gross: it.gross, unit_price: it.gross / it.qty, options: [], discount: it.discount })), discount: s3.discount, discount_amount: s3.discount_amount, subtotal: s3.subtotal, total: s3.total, payment_method: 'cash', amount_tendered: 20, change_given: 6 });
+await ps.printReceipt({ ip: '127.0.0.1', port: 19140 }, { style: 'classic', shopName: 'Test', orderId: s2.id, staff: 'Disc Cashier', items: s2.items.map((it) => ({ name: it.name, qty: it.qty, line_total: it.line_total, gross: it.gross, unit_price: it.gross / it.qty, options: [], discount: it.discount })), discount: s2.discount, discount_amount: s2.discount_amount, subtotal: s2.subtotal, total: s2.total, payment_method: 'card' });
 await new Promise((res) => setTimeout(res, 300));
 const t1 = decode(jobs[0]), t2 = decode(jobs[1]);
 check('receipt: item line shows gross £20.00, then "Discount - Manager goodwill -£6.00", TOTAL £14.00, You saved £6.00', /Disc Test Rice 5kg\s+£20\.00/.test(t1) && /Discount - Manager goodwill\s+-£6\.00/.test(t1) && /TOTAL\s+£14\.00/.test(t1) && /You saved £6\.00/.test(t1), t1);

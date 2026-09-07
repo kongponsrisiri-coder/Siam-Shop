@@ -139,6 +139,8 @@ export const api = {
     request('/api/admin/settings', { method: 'PUT', body: patch, authed: true }),
   adminUpdateShop: (name) =>
     request('/api/admin/shop', { method: 'PUT', body: { name }, authed: true }),
+  // Renders a sample sale through the same code that prints (PRINT-RENDER-001).
+  receiptPreview: (settings) => request('/api/admin/receipt-preview', { method: 'POST', body: settings || {}, authed: true }),
   adminTestEmail: (to) => request('/api/admin/test-email', { method: 'POST', body: { to }, authed: true }),
 
   // Admin categories

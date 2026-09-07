@@ -12,13 +12,15 @@ export const desktop = {
   kickDrawer: (dest) => (isElectron ? window.electron.kickDrawer(dest) : Promise.resolve({ ok: false, error: 'not-desktop' })),
   // Prep ticket on a prep printer (SIAMSHOP-PRINTERS-001)
   printPrep: (ticket, dest) => (isElectron && window.electron.printPrep ? window.electron.printPrep({ ticket, dest }) : Promise.resolve({ ok: false, error: 'not-desktop' })),
-  printZ: (z, shopName, dest) => (isElectron ? window.electron.printZ({ z, shopName, dest }) : Promise.resolve({ ok: false, error: 'not-desktop' })),
-  testPrint: (printer) => (isElectron ? window.electron.testPrint(printer) : Promise.resolve({ ok: false, error: 'not-desktop' })),
+  printZ: (z, shopName, dest, opts) => (isElectron ? window.electron.printZ({ z, shopName, dest, opts }) : Promise.resolve({ ok: false, error: 'not-desktop' })),
+  testPrint: (printer, opts) => (isElectron ? window.electron.testPrint({ ...(printer || {}), opts }) : Promise.resolve({ ok: false, error: 'not-desktop' })),
   listPrinters: () => (isElectron ? window.electron.listPrinters() : Promise.resolve([])),
   // Find network receipt printers on the till's LAN (SIAMSHOP-DEVICE-001 D1).
   scanPrinters: () => (isElectron && window.electron.scanPrinters ? window.electron.scanPrinters() : Promise.resolve({ printers: [], message: 'Scanning only works in the desktop app.' })),
+  // Settings preview rendered by the same code that prints (SIAMSHOP-PRINT-RENDER-001)
+  previewReceipt: (payload) => (isElectron && window.electron.previewReceipt ? window.electron.previewReceipt(payload) : Promise.resolve({ ok: false, error: 'not-desktop' })),
   // Parcel labels (SIAMSHOP-POST-001) — HTML → OS driver, 4×6 in.
-  printLabel: (html, copies = 1, deviceName) => (isElectron ? window.electron.printLabel({ html, copies, deviceName }) : Promise.resolve({ ok: false, error: 'not-desktop' })),
+  printLabel: (html, copies = 1, deviceName, paper) => (isElectron ? window.electron.printLabel({ html, copies, deviceName, paper }) : Promise.resolve({ ok: false, error: 'not-desktop' })),
   getConfig: () => (isElectron ? window.electron.getConfig() : Promise.resolve({})),
   saveConfig: (patch) => (isElectron ? window.electron.saveConfig(patch) : Promise.resolve({ success: false })),
   getVersion: () => (isElectron ? window.electron.getVersion() : Promise.resolve(null)),

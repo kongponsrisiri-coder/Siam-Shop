@@ -1,7 +1,7 @@
 {
   "name": "siamshop",
   "version": "0.1.0",
-  "description": "SiamShop \u2014 e-commerce platform for Thai supermarkets in the UK. Express + Postgres backend, deployed to Railway.",
+  "description": "SiamShop — e-commerce platform for Thai supermarkets in the UK. Express + Postgres backend, deployed to Railway.",
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",
@@ -27,6 +27,7 @@
     "express-rate-limit": "^8.5.2",
     "helmet": "^8.2.0",
     "pg": "^8.13.1",
+    "pureimage": "^0.4.20",
     "stripe": "^17.5.0"
   }
 }

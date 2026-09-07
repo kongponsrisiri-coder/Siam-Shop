@@ -58,13 +58,10 @@ function TopBar() {
         <Link to="/order/status">{t('track')}</Link>
         <Link to="/account">{t('account')}</Link>
         <LangToggle />
-        {/* Staff shortcuts (login-gated). Shown for the owner's convenience. */}
-        <span className="staff-links">
-          <Link to="/admin" className="staff-link">Admin</Link>
-          <Link to="/till" className="staff-link">Till</Link>
-          <Link to="/prep" className="staff-link">Prep</Link>
-          <Link to="/scan" className="staff-link">Scan</Link>
-        </span>
+        {/* No back-office links here: this header is what customers see, and
+            Admin/Till/Prep/Scan advertised the staff doors to all of them
+            (Korakot, 7 Sep). Staff reach them by URL, a bookmark, or the
+            desktop till, which has its own nav above. */}
       </div>
     </div>
   );

@@ -492,9 +492,12 @@ async function createPendingOrder(client, shopId, body, { paymentMethod, source 
     lines.push({ product: p, qty, lineTotal, snapshot, optionsTotal });
   }
 
+  // The minimum exists to make a delivery run worth the driver's time, so it
+  // applies to delivery only. Click & collect has no floor — someone walking in
+  // for a single £9 lunch box must be able to order it (Korakot, 7 Sep).
   const minOrder = Number(settings.minimum_order_amount || 0);
-  if (subtotal < minOrder) {
-    throw httpError(400, `Minimum order is £${minOrder.toFixed(2)} (your items total £${subtotal.toFixed(2)})`);
+  if (fulfilment === 'delivery' && subtotal < minOrder) {
+    throw httpError(400, `Minimum order for delivery is £${minOrder.toFixed(2)} (your items total £${subtotal.toFixed(2)})`);
   }
 
   const deliveryFee = quote ? quote.fee : 0;
@@ -646,8 +649,8 @@ async function handleMessengerOrder(shopId, senderId, text, baseUrl) {
     summary + '\n' + (th ? `รวม: £${subtotal.toFixed(2)}` : `Subtotal: £${subtotal.toFixed(2)}`);
   if (subtotal < minOrder) {
     reply += '\n' + (th
-      ? `(ยอดสั่งซื้อขั้นต่ำ £${minOrder.toFixed(2)} — กรุณาเพิ่มสินค้าค่ะ)`
-      : `(Minimum order is £${minOrder.toFixed(2)} — please add a little more.)`);
+      ? `(ยอดสั่งซื้อขั้นต่ำสำหรับจัดส่ง £${minOrder.toFixed(2)} — เพิ่มสินค้าอีกนิด หรือเลือกมารับเองได้ค่ะ)`
+      : `(Minimum for delivery is £${minOrder.toFixed(2)} — add a little more, or choose collection.)`);
   }
   if (parsed.unmatched.length) {
     reply += '\n' + (th ? 'ไม่พบ: ' : "Couldn't find: ") + parsed.unmatched.join(', ');
@@ -1071,6 +1074,10 @@ app.get('/api/settings', async (req, res) => {
       vat_number: s.vat_number || '',
       receipt_copies: Math.min(3, Math.max(1, parseInt(s.receipt_copies, 10) || 1)),
       receipt_show_logo: s.receipt_show_logo === '1' || s.receipt_show_logo === 'true',
+      // SIAMSHOP-PRINT-RENDER-001 — tickets are drawn with a real typeface by
+      // default; 'classic' falls back to the printer's own font.
+      receipt_style: s.receipt_style === 'classic' ? 'classic' : 'rendered',
+      print_size: s.print_size === 'large' ? 'large' : 'normal',
       // SIAMSHOP-DEVICE-001 — per-shop brand (theme.js applies; Logo swaps).
       brand_primary: BRAND_HEX.test(s.brand_primary || '') ? s.brand_primary : '',
       brand_accent: BRAND_HEX.test(s.brand_accent || '') ? s.brand_accent : '',
@@ -1935,6 +1942,12 @@ app.put('/api/admin/settings', requireAuth, async (req, res) => {
       }
       if (key === 'brand_logo' && value !== '' && !isLogoDataUrl(String(value))) {
         return res.status(400).json({ error: 'Logo must be a PNG/JPEG/WebP image under 400 KB' });
+      }
+      if (key === 'receipt_style' && !['rendered', 'classic'].includes(String(value))) {
+        return res.status(400).json({ error: "receipt_style must be 'rendered' or 'classic'" });
+      }
+      if (key === 'print_size' && !['normal', 'large'].includes(String(value))) {
+        return res.status(400).json({ error: "print_size must be 'normal' or 'large'" });
       }
       await pool.query(
         `INSERT INTO shop_settings (shop_id, key, value) VALUES ($1,$2,$3)
@@ -3475,10 +3488,54 @@ app.get('/api/admin/report', requireAuth, async (req, res) => {
 // ---------------------------------------------------------------------------
 // Admin CRM — customers + spending (SIAMSHOP-006)
 // ---------------------------------------------------------------------------
+// Receipt preview (SIAMSHOP-PRINT-RENDER-001). Renders a SAMPLE sale through
+// exactly the same code the printer uses, so what the owner sees in Settings is
+// what comes out of the machine. pureimage is pure JS, so this works server-side
+// for the web admin as well as over IPC in the desktop app.
+function sampleReceipt(settings, shop) {
+  return {
+    shopName: (shop && shop.name) || 'SiamShop',
+    header: settings.receipt_header || '',
+    footer: settings.receipt_footer || '',
+    vatNote: settings.vat_number ? `VAT No. ${settings.vat_number}` : '',
+    orderId: 1234, staff: 'Nok', createdAt: new Date().toISOString(), fulfilment: 'takeaway',
+    items: [
+      { name: 'Rice Lunch Box', qty: 1, line_total: 11.7, gross: 11.7, unit_price: 11.7, options: ['Large', 'Spicy Chilli Basil Pork'] },
+      { name: 'ผัดไทยกุ้งสด Pad Thai Prawn', qty: 2, line_total: 17.9, unit_price: 8.95, options: [] },
+      { name: 'Tiparos Fish Sauce 300ml', qty: 2, line_total: 3, unit_price: 1.5, options: [] },
+    ],
+    subtotal: 32.6, total: 32.6, payment_method: 'cash', amount_tendered: 40, change_given: 7.4,
+    logo: settings.brand_logo || '', showLogo: settings.receipt_show_logo === '1' || settings.receipt_show_logo === 'true',
+    logoInvert: settings.brand_logo_invert === '1' || settings.brand_logo_invert === 'true',
+    style: settings.receipt_style === 'classic' ? 'classic' : 'rendered',
+    size: settings.print_size === 'large' ? 'large' : 'normal',
+  };
+}
+app.post('/api/admin/receipt-preview', requireAuth, requireManager, async (req, res) => {
+  try {
+    const shopId = await resolveShopId(req);
+    if (!shopId) return res.status(404).json({ error: 'Shop not found' });
+    const saved = await getSettings(shopId);
+    const settings = { ...saved, ...(req.body || {}) }; // preview unsaved edits
+    const { rows } = await pool.query(`SELECT id, name FROM shops WHERE id = $1`, [shopId]);
+    const r = sampleReceipt(settings, rows[0]);
+    if (r.style === 'classic') return res.json({ style: 'classic' });
+    const render = require('../electron/ticketRender');
+    const png = await render.receiptPNG(r, { size: r.size, logo: r.showLogo ? r.logo : null, invert: r.logoInvert });
+    res.json({ style: 'rendered', size: r.size, png: `data:image/png;base64,${png.toString('base64')}` });
+  } catch (err) {
+    console.error('[receipt-preview]', err.message);
+    res.status(500).json({ error: 'Could not render the preview' });
+  }
+});
+
 // ---------------------------------------------------------------------------
 // Printers (SIAMSHOP-PRINTERS-001): shop-wide list with jobs; prep tickets queue.
 // ---------------------------------------------------------------------------
 const PRINTER_JOBS = ['receipt', 'prep', 'label'];
+// 'label' = any printer that is NOT the 80 mm thermal — parcel labels, shelf
+// labels, A4 — so the paper size travels with the printer.
+const PRINTER_PAPERS = ['label4x6', 'label4x2', 'label2x1', 'a4', 'a5'];
 function printerBody(b = {}) {
   const kind = b.kind === 'usb' ? 'usb' : 'network';
   const out = {
@@ -3490,6 +3547,7 @@ function printerBody(b = {}) {
     usb_name: kind === 'usb' ? String(b.usb_name || '').trim().slice(0, 200) : null,
     model: String(b.model || '').trim().slice(0, 120) || null,
     job: PRINTER_JOBS.includes(b.job) ? b.job : 'receipt',
+    paper: PRINTER_PAPERS.includes(b.paper) ? b.paper : 'label4x6',
     prep_categories: Array.isArray(b.prep_categories) ? b.prep_categories.map((x) => parseInt(x, 10)).filter(Number.isInteger) : [],
     active: b.active == null ? true : !!b.active,
   };
@@ -3518,9 +3576,9 @@ app.post('/api/admin/printers', requireAuth, requireManager, async (req, res) =>
     if (!shopId) return res.status(404).json({ error: 'Shop not found' });
     const b = printerBody(req.body);
     const { rows } = await pool.query(
-      `INSERT INTO printers (shop_id, name, kind, ip, port, lpr_queue, usb_name, model, job, prep_categories, active)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
-      [shopId, b.name, b.kind, b.ip, b.port, b.lpr_queue, b.usb_name, b.model, b.job, b.prep_categories, b.active]
+      `INSERT INTO printers (shop_id, name, kind, ip, port, lpr_queue, usb_name, model, job, prep_categories, active, paper)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *`,
+      [shopId, b.name, b.kind, b.ip, b.port, b.lpr_queue, b.usb_name, b.model, b.job, b.prep_categories, b.active, b.paper]
     );
     res.status(201).json(rows[0]);
   } catch (err) {
@@ -3537,9 +3595,9 @@ app.put('/api/admin/printers/:id', requireAuth, requireManager, async (req, res)
     if (!cur[0]) return res.status(404).json({ error: 'Printer not found' });
     const b = printerBody({ ...cur[0], ...req.body, prep_categories: req.body.prep_categories ?? cur[0].prep_categories });
     const { rows } = await pool.query(
-      `UPDATE printers SET name=$3, kind=$4, ip=$5, port=$6, lpr_queue=$7, usb_name=$8, model=$9, job=$10, prep_categories=$11, active=$12
+      `UPDATE printers SET name=$3, kind=$4, ip=$5, port=$6, lpr_queue=$7, usb_name=$8, model=$9, job=$10, prep_categories=$11, active=$12, paper=$13
        WHERE id = $1 AND shop_id = $2 RETURNING *`,
-      [req.params.id, shopId, b.name, b.kind, b.ip, b.port, b.lpr_queue, b.usb_name, b.model, b.job, b.prep_categories, b.active]
+      [req.params.id, shopId, b.name, b.kind, b.ip, b.port, b.lpr_queue, b.usb_name, b.model, b.job, b.prep_categories, b.active, b.paper]
     );
     res.json(rows[0]);
   } catch (err) {
