@@ -1,7 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { api, auth } from '../api.js';
+import { api, auth, staffSession } from '../api.js';
 import { Logo } from '../components/Logo.jsx';
+import StaffGate, { StaffChip } from '../components/StaffGate.jsx';
 
 // Counter prep screen (SIAMSHOP-505). One column of tickets for every paid
 // order (or till sale) that contains a made-to-order line: what to cook, with
@@ -9,39 +10,6 @@ import { Logo } from '../components/Logo.jsx';
 // Polls every 10 s; chimes on a new ticket; each ticket prints as an 80 mm slip.
 
 const POLL_MS = 10000;
-
-function LoginGate({ onIn }) {
-  const [password, setPassword] = useState('');
-  const [error, setError] = useState('');
-  const [busy, setBusy] = useState(false);
-  async function submit(e) {
-    e.preventDefault();
-    setBusy(true);
-    setError('');
-    try {
-      const { token } = await api.login(password);
-      auth.set(token);
-      onIn();
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setBusy(false);
-    }
-  }
-  return (
-    <div className="container" style={{ maxWidth: 380 }}>
-      <div className="panel">
-        <h1 style={{ marginTop: 0 }}>Prep screen sign in</h1>
-        <form onSubmit={submit}>
-          <label>Staff password</label>
-          <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoFocus />
-          {error && <p className="err">{error}</p>}
-          <button className="btn" style={{ marginTop: 12 }} disabled={busy}>{busy ? 'Signing in…' : 'Sign in'}</button>
-        </form>
-      </div>
-    </div>
-  );
-}
 
 // Two short beeps via WebAudio — no asset to load, works on tablets after the
 // first user interaction (browsers gate audio until then).
@@ -137,7 +105,7 @@ export default function PrepScreen() {
 
   useEffect(() => {
     if (!auth.get()) { setChecking(false); return; }
-    api.me().then(() => setAuthed(true)).catch(() => auth.clear()).finally(() => setChecking(false));
+    api.me().then(() => setAuthed(true)).catch((e) => { if (e.status === 401 || e.status === 403) { auth.clear(); staffSession.clear(); } }).finally(() => setChecking(false));
   }, []);
 
   async function load() {
@@ -184,7 +152,7 @@ export default function PrepScreen() {
   }
 
   if (checking) return <div className="container center muted">Loading…</div>;
-  if (!authed) return <LoginGate onIn={() => setAuthed(true)} />;
+  if (!authed) return <StaffGate need="staff" title="Prep screen sign in" onIn={() => setAuthed(true)} />;
 
   const queue = orders.filter((o) => o.prep_status !== 'ready');
   const ready = orders.filter((o) => o.prep_status === 'ready');
@@ -193,6 +161,7 @@ export default function PrepScreen() {
     <div className={`prep ${printing ? 'printing' : ''}`} data-printing={printing || ''}>
       <div className="till-head no-print">
         <Link to="/" className="brand surface-brand"><Logo size={26} light /><span className="surface-tag">Prep</span></Link>
+        <StaffChip onOut={() => setAuthed(false)} />
         <div className="spacer" />
         <span className="till-takings">{queue.length} to make · {ready.length} ready</span>
         <button className={`btn ${sound ? 'secondary' : 'ghost'}`} style={{ marginLeft: 12 }} onClick={() => setSound((s) => !s)} title="New-order chime">

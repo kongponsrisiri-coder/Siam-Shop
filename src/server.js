@@ -47,6 +47,17 @@ const authLimiter = rateLimit({
   legacyHeaders: false,
   message: { error: 'Too many attempts — please wait a few minutes and try again.' },
 });
+// Staff PIN pad (SIAMSHOP-ELECTRON-001): a whole counter shares one IP and
+// signs in/out all day, so only FAILED attempts count against the limit —
+// brute force is still capped at 10 wrong PINs per 15 min per IP.
+const pinLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  skipSuccessfulRequests: true,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many wrong PINs — please wait a few minutes and try again.' },
+});
 const lookupLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 60, // order tracking: generous, but blocks scripted enumeration
@@ -107,15 +118,47 @@ function verifyToken(token) {
   }
 }
 
-// Route gate for admin endpoints. Every admin endpoint must use this.
+// Staff roles (SIAMSHOP-ELECTRON-001). The owner's password token is role
+// 'admin' and can do everything; staff PIN tokens carry one of these roles.
+// Non-manager staff are limited to the surfaces their job needs — the list
+// is by path prefix so a new admin endpoint is closed to them by default.
+const STAFF_ROLES = ['manager', 'cashier', 'prep'];
+const ROLE_ALLOW = {
+  cashier: [
+    ['GET', /^\/api\/admin\/me$/], ['GET', /^\/api\/admin\/products$/], ['GET', /^\/api\/admin\/orders(\/|$)/],
+    ['*', /^\/api\/sales(\/|$)/], ['*', /^\/api\/prep(\/|$)/], ['GET', /^\/api\/products\/lookup$/],
+    ['*', /^\/api\/stock\/(receive|stocktake|goods-in-batch|scan-invoice|movements)$/], ['GET', /^\/api\/staff\/me$/],
+    ['POST', /^\/api\/admin\/orders\/\d+\/(ready|collected)$/],
+  ],
+  prep: [
+    ['GET', /^\/api\/admin\/me$/], ['*', /^\/api\/prep(\/|$)/], ['GET', /^\/api\/staff\/me$/],
+  ],
+};
+function roleAllows(role, method, path) {
+  if (role === 'admin' || role === 'manager') return true;
+  const rules = ROLE_ALLOW[role] || [];
+  return rules.some(([m, re]) => (m === '*' || m === method) && re.test(path));
+}
+
+// Route gate for staff-only endpoints (till, prep, admin). Accepts the owner's
+// password token (role admin) or a staff PIN token (manager | cashier | prep),
+// then applies the role allow-list. Customer tokens are never accepted here.
 function requireAuth(req, res, next) {
   const m = /^Bearer\s+(.+)$/i.exec(req.get('authorization') || '');
   const payload = m ? verifyToken(m[1]) : null;
-  if (!payload) {
+  if (!payload || payload.role === 'customer') {
     return res.status(401).json({ error: 'Not authenticated — please sign in again.' });
+  }
+  if (!roleAllows(payload.role, req.method, req.path)) {
+    return res.status(403).json({ error: 'Your staff role cannot do that — ask a manager.' });
   }
   req.auth = payload;
   next();
+}
+// Manager/owner only (staff management, settings…). Use after requireAuth.
+function requireManager(req, res, next) {
+  if (req.auth?.role === 'admin' || req.auth?.role === 'manager') return next();
+  return res.status(403).json({ error: 'Manager access required.' });
 }
 
 // Customer accounts (SIAMSHOP-006). Passwords hashed with scrypt (salt:hash).
@@ -643,7 +686,115 @@ app.post('/api/admin/login', authLimiter, (req, res) => {
 
 // Lightweight check the client can use to validate a stored token.
 app.get('/api/admin/me', requireAuth, (req, res) => {
-  res.json({ role: req.auth.role, expiresAt: req.auth.exp });
+  res.json({ role: req.auth.role, name: req.auth.name || (req.auth.role === 'admin' ? 'Owner' : null), sid: req.auth.sid || null, expiresAt: req.auth.exp });
+});
+
+// ---------------------------------------------------------------------------
+// Staff PIN sign-in (SIAMSHOP-ELECTRON-001)
+// ---------------------------------------------------------------------------
+const PIN_RE = /^\d{4,6}$/;
+
+// PIN → token. PINs are unique per shop (enforced on create), so the pad needs
+// no name grid: type the PIN, we find who it is. Rate-limited like admin login.
+app.post('/api/staff/login', pinLimiter, async (req, res) => {
+  try {
+    const shopId = await resolveShopId(req);
+    if (!shopId) return res.status(404).json({ error: 'Shop not found' });
+    const pin = String(req.body?.pin || '');
+    if (!PIN_RE.test(pin)) return res.status(400).json({ error: 'Enter your 4–6 digit PIN' });
+    const { rows } = await pool.query(
+      `SELECT id, name, pin_hash, role FROM staff WHERE shop_id = $1 AND active = TRUE`, [shopId]
+    );
+    const hit = rows.find((s) => verifyPassword(pin, s.pin_hash));
+    if (!hit) return res.status(401).json({ error: 'PIN not recognised' });
+    await pool.query(`UPDATE staff SET last_login_at = NOW() WHERE id = $1`, [hit.id]);
+    const exp = Date.now() + TOKEN_TTL_MS;
+    const token = signToken({ role: hit.role, name: hit.name, sid: hit.id, exp });
+    res.json({ token, role: hit.role, name: hit.name, sid: hit.id, expiresAt: exp });
+  } catch (err) {
+    console.error('[staff/login]', err.message);
+    res.status(500).json({ error: 'Sign-in failed' });
+  }
+});
+app.get('/api/staff/me', requireAuth, (req, res) => {
+  res.json({ role: req.auth.role, name: req.auth.name || 'Owner', sid: req.auth.sid || null, expiresAt: req.auth.exp });
+});
+
+// Staff management — owner or manager only.
+app.get('/api/admin/staff', requireAuth, requireManager, async (req, res) => {
+  try {
+    const shopId = await resolveShopId(req);
+    if (!shopId) return res.status(404).json({ error: 'Shop not found' });
+    const { rows } = await pool.query(
+      `SELECT id, name, role, active, created_at, last_login_at FROM staff WHERE shop_id = $1 ORDER BY active DESC, name`, [shopId]
+    );
+    res.json(rows);
+  } catch (err) {
+    console.error('[admin/staff]', err.message);
+    res.status(500).json({ error: 'Failed to load staff' });
+  }
+});
+// A PIN must be unique within the shop — otherwise the pad can't tell two
+// people apart. Compares against every active hash (small list).
+async function pinTaken(shopId, pin, exceptId = null) {
+  const { rows } = await pool.query(`SELECT id, pin_hash FROM staff WHERE shop_id = $1 AND active = TRUE`, [shopId]);
+  return rows.some((s) => s.id !== exceptId && verifyPassword(pin, s.pin_hash));
+}
+app.post('/api/admin/staff', requireAuth, requireManager, async (req, res) => {
+  try {
+    const shopId = await resolveShopId(req);
+    if (!shopId) return res.status(404).json({ error: 'Shop not found' });
+    const name = String(req.body?.name || '').trim();
+    const pin = String(req.body?.pin || '');
+    const role = STAFF_ROLES.includes(req.body?.role) ? req.body.role : 'cashier';
+    if (!name) return res.status(400).json({ error: 'Name is required' });
+    if (!PIN_RE.test(pin)) return res.status(400).json({ error: 'PIN must be 4–6 digits' });
+    if (await pinTaken(shopId, pin)) return res.status(409).json({ error: 'That PIN is already in use — choose another' });
+    const { rows } = await pool.query(
+      `INSERT INTO staff (shop_id, name, pin_hash, role) VALUES ($1,$2,$3,$4) RETURNING id, name, role, active, created_at`,
+      [shopId, name, hashPassword(pin), role]
+    );
+    res.status(201).json(rows[0]);
+  } catch (err) {
+    console.error('[admin/staff POST]', err.message);
+    res.status(500).json({ error: 'Failed to add staff' });
+  }
+});
+app.put('/api/admin/staff/:id', requireAuth, requireManager, async (req, res) => {
+  try {
+    const shopId = await resolveShopId(req);
+    if (!shopId) return res.status(404).json({ error: 'Shop not found' });
+    const id = Number(req.params.id);
+    const { name, role, active, pin } = req.body || {};
+    if (pin != null && pin !== '') {
+      if (!PIN_RE.test(String(pin))) return res.status(400).json({ error: 'PIN must be 4–6 digits' });
+      if (await pinTaken(shopId, String(pin), id)) return res.status(409).json({ error: 'That PIN is already in use — choose another' });
+    }
+    const { rows } = await pool.query(
+      `UPDATE staff SET name = COALESCE($3, name), role = COALESCE($4, role), active = COALESCE($5, active),
+              pin_hash = COALESCE($6, pin_hash)
+       WHERE id = $1 AND shop_id = $2 RETURNING id, name, role, active, created_at, last_login_at`,
+      [id, shopId, name != null ? String(name).trim() : null, STAFF_ROLES.includes(role) ? role : null,
+       active != null ? Boolean(active) : null, pin ? hashPassword(String(pin)) : null]
+    );
+    if (!rows[0]) return res.status(404).json({ error: 'Staff member not found' });
+    res.json(rows[0]);
+  } catch (err) {
+    console.error('[admin/staff PUT]', err.message);
+    res.status(500).json({ error: 'Failed to update staff' });
+  }
+});
+app.delete('/api/admin/staff/:id', requireAuth, requireManager, async (req, res) => {
+  try {
+    const shopId = await resolveShopId(req);
+    if (!shopId) return res.status(404).json({ error: 'Shop not found' });
+    const { rowCount } = await pool.query(`DELETE FROM staff WHERE id = $1 AND shop_id = $2`, [req.params.id, shopId]);
+    if (!rowCount) return res.status(404).json({ error: 'Staff member not found' });
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('[admin/staff DELETE]', err.message);
+    res.status(500).json({ error: 'Failed to remove staff' });
+  }
 });
 
 // ---------------------------------------------------------------------------
@@ -1686,6 +1837,8 @@ app.post('/api/sales', requireAuth, async (req, res) => {
       subtotal: +subtotal.toFixed(2),
       total: +total.toFixed(2),
       payment_method: paymentMethod,
+      fulfilment,
+      staff,
       amount_tendered: tendered,
       change_given: change,
       created_at: orderRes.rows[0].created_at,

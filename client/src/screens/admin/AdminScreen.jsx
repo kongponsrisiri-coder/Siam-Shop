@@ -1,6 +1,8 @@
 import React, { useEffect, useState } from 'react';
-import { api, auth } from '../../api.js';
+import { api, auth, staffSession } from '../../api.js';
 import { isDemo, setDemo } from '../../demo.js';
+import StaffGate, { roleAllowed } from '../../components/StaffGate.jsx';
+import { isElectron } from '../../electron.js';
 import DashboardSection from './DashboardSection.jsx';
 import ReportsSection from './ReportsSection.jsx';
 import ProductsSection from './ProductsSection.jsx';
@@ -8,48 +10,8 @@ import CategoriesSection from './CategoriesSection.jsx';
 import OrdersSection from './OrdersSection.jsx';
 import CustomersSection from './CustomersSection.jsx';
 import SettingsSection from './SettingsSection.jsx';
-
-function LoginForm({ onLoggedIn }) {
-  const [password, setPassword] = useState('');
-  const [error, setError] = useState('');
-  const [busy, setBusy] = useState(false);
-
-  async function submit(e) {
-    e.preventDefault();
-    setBusy(true);
-    setError('');
-    try {
-      const { token } = await api.login(password);
-      auth.set(token);
-      onLoggedIn();
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <div className="container" style={{ maxWidth: 380 }}>
-      <div className="panel">
-        <h1 style={{ marginTop: 0 }}>Admin sign in</h1>
-        <form onSubmit={submit}>
-          <label>Password</label>
-          <input
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            autoFocus
-          />
-          {error && <p className="err">{error}</p>}
-          <button className="btn" style={{ marginTop: 12 }} disabled={busy}>
-            {busy ? 'Signing in…' : 'Sign in'}
-          </button>
-        </form>
-      </div>
-    </div>
-  );
-}
+import StaffSection from './StaffSection.jsx';
+import DeviceSection from './DeviceSection.jsx';
 
 const TABS = [
   { key: 'dashboard', label: 'Dashboard', Comp: DashboardSection },
@@ -58,7 +20,9 @@ const TABS = [
   { key: 'categories', label: 'Categories', Comp: CategoriesSection },
   { key: 'orders', label: 'Orders', Comp: OrdersSection },
   { key: 'customers', label: 'Customers', Comp: CustomersSection },
+  { key: 'staff', label: 'Staff', Comp: StaffSection },
   { key: 'settings', label: 'Settings', Comp: SettingsSection },
+  ...(isElectron ? [{ key: 'device', label: 'This device', Comp: DeviceSection }] : []),
 ];
 
 export default function AdminScreen() {
@@ -78,15 +42,16 @@ export default function AdminScreen() {
       setChecking(false);
       return;
     }
+    // Admin needs a manager or the owner — a cashier's till token is not enough.
     api
       .me()
-      .then(() => setAuthed(true))
-      .catch(() => auth.clear())
+      .then((me) => { if (roleAllowed(me.role, 'manager')) setAuthed(true); })
+      .catch((e) => { if (e.status === 401 || e.status === 403) { auth.clear(); staffSession.clear(); } }) // a network blip must not sign staff out
       .finally(() => setChecking(false));
   }, []);
 
   if (checking) return <div className="container center muted">Loading…</div>;
-  if (!authed) return <LoginForm onLoggedIn={() => setAuthed(true)} />;
+  if (!authed) return <StaffGate need="manager" title="Admin sign in" onIn={() => setAuthed(true)} />;
 
   const Active = TABS.find((t) => t.key === tab)?.Comp || DashboardSection;
 
@@ -106,6 +71,7 @@ export default function AdminScreen() {
           className="btn secondary"
           onClick={() => {
             auth.clear();
+            staffSession.clear();
             setAuthed(false);
           }}
         >

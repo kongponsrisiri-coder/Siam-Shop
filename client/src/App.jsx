@@ -15,6 +15,7 @@ import ScannerScreen from './screens/ScannerScreen.jsx';
 import OrderStatusScreen from './screens/OrderStatusScreen.jsx';
 import AccountScreen from './screens/AccountScreen.jsx';
 import PrepScreen from './screens/PrepScreen.jsx';
+import { isElectron } from './electron.js';
 
 function LangToggle() {
   const { lang, toggle } = useLang();
@@ -33,6 +34,19 @@ function LangToggle() {
 function TopBar() {
   const { count } = useCart();
   const t = useT();
+  // Desktop till (SIAMSHOP-ELECTRON-001) is a staff device: no customer nav.
+  if (isElectron) {
+    return (
+      <div className="topbar">
+        <Link to="/till" className="brand" aria-label="SiamShop"><Logo size={30} /></Link>
+        <div className="navlinks">
+          <Link to="/till">Till</Link>
+          <Link to="/prep">Prep</Link>
+          <Link to="/admin">Admin</Link>
+        </div>
+      </div>
+    );
+  }
   return (
     <div className="topbar">
       <Link to="/" className="brand" aria-label="SiamShop home"><Logo size={30} /></Link>
@@ -67,7 +81,7 @@ export default function App() {
           <>
             <TopBar />
             <Routes>
-              <Route path="/" element={<StorefrontScreen />} />
+              <Route path="/" element={isElectron ? <Navigate to="/till" replace /> : <StorefrontScreen />} />
               <Route path="/product/:id" element={<ProductScreen />} />
               <Route path="/cart" element={<CartScreen />} />
               <Route path="/checkout" element={<CheckoutScreen />} />
@@ -75,9 +89,9 @@ export default function App() {
               <Route path="/order/status" element={<OrderStatusScreen />} />
               <Route path="/account" element={<AccountScreen />} />
               <Route path="/admin/*" element={<AdminScreen />} />
-              <Route path="*" element={<Navigate to="/" replace />} />
+              <Route path="*" element={<Navigate to={isElectron ? '/till' : '/'} replace />} />
             </Routes>
-            <Assistant />
+            {!isElectron && <Assistant />}
           </>
         }
       />

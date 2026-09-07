@@ -261,6 +261,23 @@ async function initDB() {
     await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS prep_status VARCHAR(20)`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_orders_prep ON orders(shop_id, created_at DESC) WHERE prep_status IS DISTINCT FROM 'done'`);
 
+    // SIAMSHOP-ELECTRON-001 — staff with PIN sign-in. Roles: manager (everything),
+    // cashier (till + prep + stock), prep (prep screen only). PINs are scrypt-hashed;
+    // orders.staff is written from the signed-in session, never typed.
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS staff (
+        id          SERIAL PRIMARY KEY,
+        shop_id     INTEGER NOT NULL REFERENCES shops(id) ON DELETE CASCADE,
+        name        VARCHAR(120) NOT NULL,
+        pin_hash    TEXT NOT NULL,
+        role        VARCHAR(20) NOT NULL DEFAULT 'cashier',
+        active      BOOLEAN NOT NULL DEFAULT TRUE,
+        created_at  TIMESTAMPTZ DEFAULT NOW(),
+        last_login_at TIMESTAMPTZ
+      )
+    `);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_staff_shop ON staff(shop_id, active)`);
+
     // Helpful indexes for the hot paths.
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_products_shop ON products(shop_id, is_active)`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_orders_shop ON orders(shop_id, created_at DESC)`);

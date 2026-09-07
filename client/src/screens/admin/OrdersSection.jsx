@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { api } from '../../api.js';
 import { maskName, maskEmail, maskAddress } from '../../demo.js';
+import { isElectron } from '../../electron.js';
 
 // Clear, combined payment + fulfilment state for the list.
 function orderState(o) {
@@ -290,6 +291,7 @@ export default function OrdersSection() {
   }
   function quickDispatch(e, o) {
     e.stopPropagation();
+    if (isElectron) return setSelected(o.id); // window.prompt is disabled in Electron — use the detail form
     const t = window.prompt(`Dispatch order #${o.id} — tracking number (optional):`, o.tracking_number || '');
     if (t === null) return;
     act(() => api.adminDispatchOrder(o.id, t.trim()));

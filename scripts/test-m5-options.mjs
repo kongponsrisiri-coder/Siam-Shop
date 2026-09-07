@@ -1,6 +1,6 @@
 // End-to-end test for SIAMSHOP-501 (options) + 502 (track_stock fix) against a
 // local server on :4999 and a throwaway Postgres. Run: node test-m5-options.mjs
-const BASE = 'http://localhost:4999';
+const BASE = process.env.BASE || 'http://localhost:4999';
 let token = '';
 let pass = 0, fail = 0;
 

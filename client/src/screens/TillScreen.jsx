@@ -1,8 +1,10 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { api, auth } from '../api.js';
+import { api, auth, staffSession } from '../api.js';
 import { Logo } from '../components/Logo.jsx';
 import OptionPicker from '../components/OptionPicker.jsx';
+import StaffGate, { StaffChip } from '../components/StaffGate.jsx';
+import { isElectron, electronConfig, desktop } from '../electron.js';
 import { describeSelection, hasOptions, lineKey, unitPrice } from '../options.js';
 
 // In-store EPOS till (SIAMSHOP-103). Staff scan a barcode or search by name to
@@ -15,39 +17,6 @@ import { describeSelection, hasOptions, lineKey, unitPrice } from '../options.js
 
 function money(n) {
   return '£' + Number(n || 0).toFixed(2);
-}
-
-function LoginGate({ onIn }) {
-  const [password, setPassword] = useState('');
-  const [error, setError] = useState('');
-  const [busy, setBusy] = useState(false);
-  async function submit(e) {
-    e.preventDefault();
-    setBusy(true);
-    setError('');
-    try {
-      const { token } = await api.login(password);
-      auth.set(token);
-      onIn();
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setBusy(false);
-    }
-  }
-  return (
-    <div className="container" style={{ maxWidth: 380 }}>
-      <div className="panel">
-        <h1 style={{ marginTop: 0 }}>Till sign in</h1>
-        <form onSubmit={submit}>
-          <label>Staff password</label>
-          <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoFocus />
-          {error && <p className="err">{error}</p>}
-          <button className="btn" style={{ marginTop: 12 }} disabled={busy}>{busy ? 'Signing in…' : 'Sign in'}</button>
-        </form>
-      </div>
-    </div>
-  );
 }
 
 export default function TillScreen() {
@@ -75,7 +44,7 @@ export default function TillScreen() {
       setChecking(false);
       return;
     }
-    api.me().then(() => setAuthed(true)).catch(() => auth.clear()).finally(() => setChecking(false));
+    api.me().then(() => setAuthed(true)).catch((e) => { if (e.status === 401 || e.status === 403) { auth.clear(); staffSession.clear(); } }).finally(() => setChecking(false));
   }, []);
 
   async function loadCatalogue() {
@@ -213,6 +182,12 @@ export default function TillScreen() {
       setTendered('');
       setFulfilment('takeaway');
       setSearch('');
+      // Desktop till (SIAMSHOP-ELECTRON-001): print + kick the drawer on cash.
+      if (isElectron) {
+        const pr = electronConfig.printer || {};
+        if (pr.kickDrawerOnCash !== false && sale.payment_method === 'cash') desktop.kickDrawer().catch(() => {});
+        if (pr.autoPrint !== false) printReceipt(sale);
+      }
       await Promise.all([loadCatalogue(), loadSummary()]);
       scanRef.current?.focus();
     } catch (err) {
@@ -222,13 +197,34 @@ export default function TillScreen() {
     }
   }
 
+  const [printMsg, setPrintMsg] = useState('');
+  async function printReceipt(sale) {
+    setPrintMsg('Printing…');
+    const r = await desktop.printReceipt({
+      shopName: electronConfig.shopName || 'SiamShop',
+      orderId: sale.id,
+      staff: staffSession.get()?.name || '',
+      createdAt: sale.created_at,
+      fulfilment: sale.fulfilment || fulfilment,
+      items: (sale.items || []).map((it) => ({
+        name: it.name, qty: it.qty, line_total: it.line_total,
+        unit_price: it.qty ? Number(it.line_total) / it.qty : it.line_total,
+        options: (it.options || []).map((o) => o.name),
+      })),
+      subtotal: sale.subtotal, total: sale.total,
+      payment_method: sale.payment_method, amount_tendered: sale.amount_tendered, change_given: sale.change_given,
+    });
+    setPrintMsg(r?.ok ? 'Receipt printed' : `Print failed: ${r?.error || 'unknown'}`);
+  }
+
   if (checking) return <div className="container center muted">Loading…</div>;
-  if (!authed) return <LoginGate onIn={() => setAuthed(true)} />;
+  if (!authed) return <StaffGate need="staff" title="Till sign in" onIn={() => setAuthed(true)} />;
 
   return (
     <div className="till">
       <div className="till-head">
         <Link to="/" className="brand surface-brand"><Logo size={26} light /><span className="surface-tag">Till</span></Link>
+        <StaffChip onOut={() => setAuthed(false)} />
         <div className="spacer" />
         {summary && (
           <div className="till-takings">
@@ -397,7 +393,14 @@ export default function TillScreen() {
             {receipt.change_given != null && (
               <div className="till-change" style={{ fontSize: 20 }}>Change due: <strong>{money(receipt.change_given)}</strong></div>
             )}
-            <button className="btn" style={{ marginTop: 16, width: '100%' }} onClick={() => { setReceipt(null); scanRef.current?.focus(); }}>
+            {isElectron && (
+              <div className="row" style={{ gap: 8, marginTop: 12 }}>
+                <button className="btn secondary" style={{ flex: 1 }} onClick={() => printReceipt(receipt)}>🖨 Print receipt</button>
+                <button className="btn secondary" onClick={() => desktop.kickDrawer()}>💵 Drawer</button>
+              </div>
+            )}
+            {printMsg && <div className="muted" style={{ marginTop: 6, fontSize: 12 }}>{printMsg}</div>}
+            <button className="btn" style={{ marginTop: 12, width: '100%' }} onClick={() => { setReceipt(null); setPrintMsg(''); scanRef.current?.focus(); }}>
               Next customer
             </button>
           </div>

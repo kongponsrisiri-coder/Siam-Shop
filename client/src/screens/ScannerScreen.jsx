@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { api, auth } from '../api.js';
+import StaffGate from '../components/StaffGate.jsx';
 import BarcodeScanner from '../components/BarcodeScanner.jsx';
 import { Logo } from '../components/Logo.jsx';
 
@@ -26,39 +27,6 @@ function money(n) {
   return '£' + Number(n || 0).toFixed(2);
 }
 
-function LoginGate({ onIn }) {
-  const [password, setPassword] = useState('');
-  const [error, setError] = useState('');
-  const [busy, setBusy] = useState(false);
-  async function submit(e) {
-    e.preventDefault();
-    setBusy(true);
-    setError('');
-    try {
-      const { token } = await api.login(password);
-      auth.set(token);
-      onIn();
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setBusy(false);
-    }
-  }
-  return (
-    <div className="scanner">
-      <div className="scanner-head"><ScannerBrand /></div>
-      <div className="scanner-body">
-        <form className="panel" onSubmit={submit}>
-          <h3 style={{ marginTop: 0 }}>Staff sign in</h3>
-          <input type="password" placeholder="Password" value={password} onChange={(e) => setPassword(e.target.value)} autoFocus />
-          {error && <p className="err">{error}</p>}
-          <button className="btn" style={{ marginTop: 12, width: '100%' }} disabled={busy}>{busy ? '…' : 'Sign in'}</button>
-        </form>
-      </div>
-    </div>
-  );
-}
-
 export default function ScannerScreen() {
   const [authed, setAuthed] = useState(false);
   const [checking, setChecking] = useState(true);
@@ -78,7 +46,7 @@ export default function ScannerScreen() {
 
   useEffect(() => {
     if (!auth.get()) { setChecking(false); return; }
-    api.me().then(() => setAuthed(true)).catch(() => auth.clear()).finally(() => setChecking(false));
+    api.me().then(() => setAuthed(true)).catch((e) => { if (e.status === 401 || e.status === 403) auth.clear(); }).finally(() => setChecking(false));
   }, []);
 
   function showFlash(type, text) {
@@ -188,7 +156,7 @@ export default function ScannerScreen() {
   }
 
   if (checking) return <div className="scanner"><div className="scanner-body center muted">Loading…</div></div>;
-  if (!authed) return <LoginGate onIn={() => setAuthed(true)} />;
+  if (!authed) return <StaffGate need="staff" title="Scanner sign in" onIn={() => setAuthed(true)} />;
 
   const showScanner = mode === 'checkout' || mode === 'receive' || mode === 'stocktake';
 

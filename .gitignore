@@ -8,3 +8,4 @@ client/dist/
 # Supplier price lists + generated import data (not committed)
 *.xlsx
 scripts/products.json
+client/dist-electron/

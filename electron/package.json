@@ -1,0 +1,79 @@
+{
+  "name": "siamshop-electron",
+  "version": "0.1.0",
+  "description": "SiamShop desktop till — staff surfaces (Till · Prep · Admin) for Thai grocery shops",
+  "main": "main.js",
+  "private": true,
+  "scripts": {
+    "start": "electron .",
+    "start:dev": "ELECTRON_DEV=1 electron .",
+    "build:mac": "electron-builder --mac --publish never",
+    "build:win": "electron-builder --win --publish never",
+    "build:all": "electron-builder -mw --publish never"
+  },
+  "build": {
+    "appId": "uk.co.siamepos.shop",
+    "productName": "SiamShop",
+    "artifactName": "${productName}-${version}-Setup.${ext}",
+    "asar": true,
+    "directories": {
+      "output": "dist-electron",
+      "buildResources": "build"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "printService.js",
+      "build/**"
+    ],
+    "extraResources": [
+      {
+        "from": "../client/dist-electron",
+        "to": "client-dist"
+      }
+    ],
+    "mac": {
+      "icon": "build/icon.png",
+      "target": [
+        { "target": "dmg", "arch": ["arm64"] },
+        { "target": "zip", "arch": ["arm64"] }
+      ],
+      "category": "public.app-category.business",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "entitlements.mac.plist",
+      "entitlementsInherit": "entitlements.mac.plist"
+    },
+    "dmg": {
+      "title": "SiamShop Setup"
+    },
+    "win": {
+      "icon": "build/icon.png",
+      "target": [
+        { "target": "nsis", "arch": ["x64"] }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "shortcutName": "SiamShop"
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "kongponsrisiri-coder",
+        "repo": "siamshop-releases",
+        "releaseType": "release"
+      }
+    ]
+  },
+  "devDependencies": {
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8"
+  },
+  "dependencies": {
+    "electron-updater": "^6.3.9"
+  }
+}

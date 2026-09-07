@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+  <dict>
+    <!-- SEPOS-NOTARIZE-001 — entitlements required for Apple notarization
+         with hardenedRuntime=true. The keys below enable behaviours that
+         Electron uses by default; without them, the notarized app would
+         crash at launch with cryptic signing errors. Specifically:
+         - allow-jit + allow-unsigned-executable-memory: V8 JIT compilation
+         - allow-dyld-environment-variables: Electron uses ELECTRON_RUN_AS_NODE
+         - cs.disable-library-validation: native modules (none today — kept for parity with the restaurant shell)
+         - device.print + device.network: receipt printing over LAN
+    -->
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+    <key>com.apple.security.cs.allow-dyld-environment-variables</key>
+    <true/>
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <true/>
+    <key>com.apple.security.device.print</key>
+    <true/>
+    <key>com.apple.security.network.client</key>
+    <true/>
+    <key>com.apple.security.network.server</key>
+    <true/>
+  </dict>
+</plist>

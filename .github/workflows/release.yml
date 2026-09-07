@@ -1,0 +1,155 @@
+name: Release
+
+# SiamShop desktop till (SIAMSHOP-ELECTRON-001) — copied from restaurant-epos
+# release.yml and adapted: no native modules to rebuild, client is built with
+# the Electron base (`npm run build:electron-client`), and the release is
+# published ONLY to the public releases repo (this code repo may be private;
+# electron-updater can't read private releases without shipping a token).
+#
+# Triggers:
+#   - git tag push (v*)        → builds both installers + publishes a Release
+#   - manual workflow_dispatch → builds both installers, skips the Release job
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  # Fail fast if the tag and electron/package.json disagree — electron-updater
+  # compares versions, a mismatch means no update (or the wrong one).
+  verify-version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Tag must match electron/package.json version
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          PKG=$(node -p "require('./electron/package.json').version")
+          TAG="${GITHUB_REF_NAME#v}"
+          echo "electron/package.json = $PKG   tag = $TAG"
+          if [ "$PKG" != "$TAG" ]; then
+            echo "::error::Tag v$TAG does not match electron/package.json version $PKG — bump the version before tagging."
+            exit 1
+          fi
+
+  build-mac:
+    needs: verify-version
+    # macos-14 on purpose: macos-latest (→ 15 / Xcode 16) broke electron-builder 25 on 6 Sep 2026.
+    runs-on: macos-14
+    timeout-minutes: 60
+    env:
+      HAS_MAC_CERT: ${{ secrets.MAC_CERT_P12_BASE64 != '' }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: npm
+      - name: Install root dependencies
+        run: npm install
+      - name: Build React client for Electron (base ./, config-driven API)
+        run: |
+          cd client && npm install && cd ..
+          npm run build:electron-client
+      - name: Install Electron
+        run: cd electron && npm install
+      - name: Import Apple Developer ID certificate
+        if: env.HAS_MAC_CERT == 'true'
+        uses: apple-actions/import-codesign-certs@v7
+        with:
+          p12-file-base64: ${{ secrets.MAC_CERT_P12_BASE64 }}
+          p12-password:    ${{ secrets.MAC_CERT_PASSWORD }}
+      - name: Build Mac DMG + ZIP
+        run: cd electron && npm run build:mac
+        env:
+          CSC_LINK:                    ${{ secrets.MAC_CERT_P12_BASE64 }}
+          CSC_KEY_PASSWORD:            ${{ secrets.MAC_CERT_PASSWORD }}
+          APPLE_ID:                    ${{ secrets.MAC_APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.MAC_APPLE_APP_PASSWORD }}
+          APPLE_TEAM_ID:               ${{ secrets.MAC_TEAM_ID }}
+      - name: Show build output
+        run: ls -la electron/dist-electron
+      - name: Upload Mac installer + update manifest
+        uses: actions/upload-artifact@v5
+        with:
+          name: mac-installer
+          # .zip is what Mac auto-update actually consumes — dmg-only breaks OTA.
+          path: |
+            electron/dist-electron/*.dmg
+            electron/dist-electron/*.zip
+            electron/dist-electron/*.blockmap
+            electron/dist-electron/latest-mac.yml
+          if-no-files-found: error
+          retention-days: 14
+
+  build-windows:
+    needs: verify-version
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: npm
+      - name: Install root dependencies
+        run: npm install
+      - name: Build React client for Electron
+        run: |
+          cd client && npm install && cd ..
+          npm run build:electron-client
+      - name: Install Electron
+        run: cd electron && npm install
+      # Unsigned on purpose (no Windows code-signing cert yet — SmartScreen warns; see electron/README.md).
+      - name: Build Windows installer
+        run: cd electron && npm run build:win
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Show build output
+        shell: cmd
+        run: dir electron\dist-electron /s
+      - name: Upload Windows installer + update manifest
+        uses: actions/upload-artifact@v5
+        with:
+          name: windows-installer
+          path: |
+            electron/dist-electron/*.exe
+            electron/dist-electron/*.blockmap
+            electron/dist-electron/latest.yml
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    needs: [build-mac, build-windows]
+    runs-on: ubuntu-latest
+    # Publish on a v* tag as long as Windows built — a Mac notarisation hiccup must not block the Windows release.
+    if: always() && startsWith(github.ref, 'refs/tags/v') && needs.build-windows.result == 'success'
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v5
+        with:
+          path: dist
+      - run: ls -laR dist
+      # Public releases repo — the updater target baked into electron/package.json build.publish.
+      - name: Publish to kongponsrisiri-coder/siamshop-releases
+        uses: softprops/action-gh-release@v2
+        with:
+          repository: kongponsrisiri-coder/siamshop-releases
+          token: ${{ secrets.RELEASES_REPO_TOKEN }}
+          tag_name: ${{ github.ref_name }}
+          name: SiamShop ${{ github.ref_name }}
+          generate_release_notes: true
+          fail_on_unmatched_files: false
+          files: |
+            dist/mac-installer/*.dmg
+            dist/mac-installer/*.zip
+            dist/mac-installer/*.blockmap
+            dist/mac-installer/latest-mac.yml
+            dist/windows-installer/*.exe
+            dist/windows-installer/*.blockmap
+            dist/windows-installer/latest.yml

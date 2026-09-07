@@ -1,7 +1,7 @@
 {
   "name": "siamshop",
   "version": "0.1.0",
-  "description": "SiamShop — e-commerce platform for Thai supermarkets in the UK. Express + Postgres backend, deployed to Railway.",
+  "description": "SiamShop \u2014 e-commerce platform for Thai supermarkets in the UK. Express + Postgres backend, deployed to Railway.",
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",
@@ -9,7 +9,9 @@
     "dev": "node --watch src/server.js",
     "seed": "node scripts/seed-demo.js",
     "import-products": "node scripts/import-products.js",
-    "test": "echo \"No tests yet\" && exit 0"
+    "test": "echo \"No tests yet\" && exit 0",
+    "build:electron-client": "node scripts/build-electron-client.js",
+    "electron": "npm run build:electron-client && npm --prefix electron start"
   },
   "author": "Korakot Kongponsrisiri <info@siamepos.co.uk>",
   "license": "UNLICENSED",

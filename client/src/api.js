@@ -1,15 +1,33 @@
 // SiamShop — all backend fetch calls live here (CLAUDE.md rule).
 // In dev, Vite proxies /api to the Express backend. In production set
-// VITE_API_BASE to the Railway URL at build time.
+// VITE_API_BASE to the Railway URL at build time. On the desktop till
+// (SIAMSHOP-ELECTRON-001) the base + shop slug come from the install's
+// config.json via the Electron preload, not from the build.
+import { electronConfig, isElectron } from './electron.js';
 
-const API_BASE = import.meta.env.VITE_API_BASE || '';
+const API_BASE = (isElectron && electronConfig.cloudApiUrl ? String(electronConfig.cloudApiUrl).replace(/\/$/, '') : null)
+  ?? import.meta.env.VITE_API_BASE ?? '';
+const SHOP_SLUG = (isElectron && electronConfig.shopSlug) || '';
 
-// Admin token stored in localStorage; attached as a Bearer header.
+// The desktop till talks to a multi-shop cloud, so every request names its shop.
+function withShop(path) {
+  if (!SHOP_SLUG) return path;
+  return path + (path.includes('?') ? '&' : '?') + 'shop=' + encodeURIComponent(SHOP_SLUG);
+}
+
+// Staff/admin token stored in localStorage; attached as a Bearer header.
 const TOKEN_KEY = 'siamshop_admin_token';
 export const auth = {
   get: () => localStorage.getItem(TOKEN_KEY) || '',
   set: (t) => localStorage.setItem(TOKEN_KEY, t),
   clear: () => localStorage.removeItem(TOKEN_KEY),
+};
+// Who is signed in (name + role) — set by the PIN pad / owner login.
+const STAFF_KEY = 'siamshop_staff';
+export const staffSession = {
+  get: () => { try { return JSON.parse(localStorage.getItem(STAFF_KEY)) || null; } catch { return null; } },
+  set: (s) => localStorage.setItem(STAFF_KEY, JSON.stringify(s)),
+  clear: () => localStorage.removeItem(STAFF_KEY),
 };
 
 // Separate token for logged-in customers (kept apart from the admin token).
@@ -25,7 +43,7 @@ async function request(path, { method = 'GET', body, authed = false, customerAut
   if (authed) headers.Authorization = `Bearer ${auth.get()}`;
   if (customerAuthed) headers.Authorization = `Bearer ${customerAuth.get()}`;
 
-  const res = await fetch(`${API_BASE}${path}`, {
+  const res = await fetch(`${API_BASE}${withShop(path)}`, {
     method,
     headers,
     body: body != null ? JSON.stringify(body) : undefined,
@@ -76,6 +94,13 @@ export const api = {
   // Admin auth
   login: (password) => request('/api/admin/login', { method: 'POST', body: { password } }),
   me: () => request('/api/admin/me', { authed: true }),
+  // Staff PIN sign-in + management (SIAMSHOP-ELECTRON-001)
+  staffLogin: (pin) => request('/api/staff/login', { method: 'POST', body: { pin } }),
+  staffMe: () => request('/api/staff/me', { authed: true }),
+  adminListStaff: () => request('/api/admin/staff', { authed: true }),
+  adminCreateStaff: (s) => request('/api/admin/staff', { method: 'POST', body: s, authed: true }),
+  adminUpdateStaff: (id, s) => request(`/api/admin/staff/${id}`, { method: 'PUT', body: s, authed: true }),
+  adminDeleteStaff: (id) => request(`/api/admin/staff/${id}`, { method: 'DELETE', authed: true }),
 
   // Admin products
   adminListProducts: () => request('/api/admin/products', { authed: true }),
@@ -128,7 +153,7 @@ export const api = {
   adminGetCustomer: (id) => request(`/api/admin/customers/${id}`, { authed: true }),
   adminDeleteCustomer: (id) => request(`/api/admin/customers/${id}`, { method: 'DELETE', authed: true }),
   exportCustomersCsv: async (consentOnly) => {
-    const res = await fetch(`${API_BASE}/api/admin/customers.csv${consentOnly ? '?consent=1' : ''}`, {
+    const res = await fetch(`${API_BASE}${withShop(`/api/admin/customers.csv${consentOnly ? '?consent=1' : ''}`)}`, {
       headers: { Authorization: `Bearer ${auth.get()}` },
     });
     if (!res.ok) throw new Error('Export failed');
@@ -158,7 +183,7 @@ export const api = {
     request(`/api/prep/${id}/status`, { method: 'POST', body: { prep_status }, authed: true }),
   // CSV export — fetch with the auth header and return a Blob to download.
   exportOrdersCsv: async () => {
-    const res = await fetch(`${API_BASE}/api/admin/orders.csv`, {
+    const res = await fetch(`${API_BASE}${withShop('/api/admin/orders.csv')}`, {
       headers: { Authorization: `Bearer ${auth.get()}` },
     });
     if (!res.ok) throw new Error('Export failed');
