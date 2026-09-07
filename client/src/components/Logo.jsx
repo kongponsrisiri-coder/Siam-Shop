@@ -1,4 +1,5 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
+import { getBrand, onBrandChange } from '../theme.js';
 
 // SiamShop logo — part of the SiamEPOS brand family (see restaurant-epos/BRAND_CI.md).
 // The mark is the shared geometric 5-petal lotus in a double gold ring; the
@@ -36,7 +37,19 @@ export function LotusBadge({ size = 32, center = NAVY, title = 'SiamShop' }) {
 
 // Lotus badge + "SiamShop" wordmark, lockup. `light` = on a light background
 // (navy "Siam"); default is for dark backgrounds (white "Siam").
+// The shop's own logo (Admin → Settings → Brand) replaces the lockup wherever
+// <Logo/> is used — header, PIN screen, Admin. Falls back to the lotus.
+export function useBrandLogo() {
+  const [logo, setLogo] = useState(() => getBrand().logo);
+  useEffect(() => onBrandChange((b) => setLogo(b.logo)), []);
+  return logo;
+}
+
 export function Logo({ size = 30, light = false, wordmark = true }) {
+  const brandLogo = useBrandLogo();
+  if (brandLogo) {
+    return <img src={brandLogo} alt="Shop logo" style={{ height: Math.round(size * 1.35), maxWidth: size * 7, width: 'auto', display: 'block', objectFit: 'contain' }} />;
+  }
   const siam = light ? NAVY : '#ffffff';
   const center = light ? '#ffffff' : NAVY;
   return (

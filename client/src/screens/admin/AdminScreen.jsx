@@ -28,7 +28,14 @@ const TABS = [
 export default function AdminScreen() {
   const [authed, setAuthed] = useState(false);
   const [checking, setChecking] = useState(true);
-  const [tab, setTab] = useState('dashboard');
+  // ?tab=device etc. opens a section directly (deep links + the render smoke test).
+  const [tab, setTab] = useState(() => {
+    try {
+      const q = new URLSearchParams((window.location.hash.split('?')[1]) || window.location.search);
+      const t = q.get('tab');
+      return t && TABS.some((x) => x.key === t) ? t : 'dashboard';
+    } catch { return 'dashboard'; }
+  });
   const [demo, setDemoState] = useState(isDemo());
 
   function toggleDemo() {

@@ -17,6 +17,8 @@ const { app, BrowserWindow, Tray, Menu, nativeImage, shell, clipboard, ipcMain, 
 const path = require('path');
 const fs = require('fs');
 const printService = require('./printService');
+const printerScan = require('./printerScan');
+const raster = require('./raster');
 
 const PROJECT_ROOT = path.resolve(__dirname, '..');
 const DEV_URL = 'http://localhost:5173';
@@ -77,7 +79,10 @@ function rendererConfig(cfg) {
       ip: c.printer?.ip || '', port: Number(c.printer?.port) || 9100, name: c.printer?.name || '',
       lprQueue: c.printer?.lprQueue || 'lp',
       autoPrint: c.printer?.autoPrint !== false, kickDrawerOnCash: c.printer?.kickDrawerOnCash !== false,
+      lastTestAt: c.printer?.lastTestAt || null, lastTestOk: c.printer?.lastTestOk ?? null, model: c.printer?.model || '',
     },
+    // Barcode scanner (SIAMSHOP-DEVICE-001 D2): suffix key + capture anywhere.
+    scanner: { suffix: ['enter', 'tab', 'none'].includes(c.scanner?.suffix) ? c.scanner.suffix : 'enter', captureAnywhere: c.scanner?.captureAnywhere !== false },
     version: app.getVersion(),
   };
 }
@@ -130,6 +135,14 @@ ipcMain.handle('siamshop:save-config', async (event, patch) => {
         ...(patch.printer.lprQueue != null ? { lprQueue: String(patch.printer.lprQueue).trim() || 'lp' } : {}),
         ...(patch.printer.autoPrint != null ? { autoPrint: !!patch.printer.autoPrint } : {}),
         ...(patch.printer.kickDrawerOnCash != null ? { kickDrawerOnCash: !!patch.printer.kickDrawerOnCash } : {}),
+        ...(patch.printer.model != null ? { model: String(patch.printer.model).slice(0, 80) } : {}),
+      };
+    }
+    if (patch.scanner) {
+      next.scanner = {
+        ...(cur.scanner || {}),
+        ...(patch.scanner.suffix != null ? { suffix: ['enter', 'tab', 'none'].includes(patch.scanner.suffix) ? patch.scanner.suffix : 'enter' } : {}),
+        ...(patch.scanner.captureAnywhere != null ? { captureAnywhere: !!patch.scanner.captureAnywhere } : {}),
       };
     }
     const err = validateCore(next);
@@ -157,10 +170,36 @@ ipcMain.handle('siamshop:reset-config', async () => {
 
 // Printing — main process, ESC/POS over the network/USB (see printService.js).
 function printerCfg() { return rendererConfig().printer; }
+// Receipt logo (SIAMSHOP-DEVICE-001 D4): brand logo data URL → nativeImage →
+// ≤384-dot-wide bitmap → GS v 0 via raster.js. Cached per logo content.
+const _logoCache = new Map(); // hash → Buffer
+const LOGO_W = 384, LOGO_MAX_H = 200;
+function logoRaster(dataUrl, invert = false) {
+  if (!dataUrl || typeof dataUrl !== 'string' || !dataUrl.startsWith('data:image/')) return null;
+  const key = raster.hashString(dataUrl) + (invert ? ':inv' : '');
+  if (_logoCache.has(key)) return _logoCache.get(key);
+  let out = null;
+  try {
+    let img = nativeImage.createFromDataURL(dataUrl);
+    if (!img.isEmpty()) {
+      const sz = img.getSize();
+      const scale = Math.min(LOGO_W / sz.width, LOGO_MAX_H / sz.height, 1);
+      const w = Math.max(8, Math.round(sz.width * scale)), h = Math.max(1, Math.round(sz.height * scale));
+      img = img.resize({ width: w, height: h, quality: 'best' });
+      const { width, height } = img.getSize();
+      out = raster.bitmapToEscPos({ width, height, data: img.toBitmap(), channels: 4, order: 'bgra', invert: !!invert });
+    }
+  } catch (e) { console.warn('[print] logo raster failed:', e.message); }
+  _logoCache.set(key, out);
+  return out;
+}
 ipcMain.handle('siamshop:print-receipt', async (event, payload) => {
   try {
     const copies = Math.min(3, Math.max(1, parseInt(payload?.copies, 10) || 1));
-    for (let i = 0; i < copies; i++) await printService.printReceipt(printerCfg(), payload || {});
+    const p = { ...(payload || {}) };
+    if (p.showLogo && p.logo) p.logoRaster = logoRaster(p.logo, !!p.logoInvert);
+    delete p.logo;
+    for (let i = 0; i < copies; i++) await printService.printReceipt(printerCfg(), p);
     return { ok: true, copies };
   } catch (e) {
     console.error('[print] receipt failed:', e.message);
@@ -179,16 +218,54 @@ ipcMain.handle('siamshop:kick-drawer', async () => {
   try { await printService.openCashDrawer(printerCfg()); return { ok: true }; }
   catch (e) { return { ok: false, error: e.message }; }
 });
+function recordTest(ok) {
+  try {
+    const cur = loadConfig(); if (!cur || !cur.printer) return;
+    cur.printer.lastTestAt = new Date().toISOString(); cur.printer.lastTestOk = ok;
+    saveConfig(cur);
+  } catch (_) {}
+}
 ipcMain.handle('siamshop:test-print', async (event, printer) => {
-  try { await printService.testPrint(printer || printerCfg()); return { ok: true }; }
-  catch (e) { return { ok: false, error: e.message }; }
+  const saved = printerCfg();
+  const target = printer || saved;
+  const isSaved = !printer || (String(printer.ip || '') === saved.ip && String(printer.name || '') === saved.name);
+  try { await printService.testPrint(target); if (isSaved) recordTest(true); return { ok: true }; }
+  catch (e) { if (isSaved) recordTest(false); return { ok: false, error: e.message }; }
+});
+// "Find printers" (SIAMSHOP-DEVICE-001 D1): sweep the LAN for port-9100 responders.
+// If a CUPS queue points at a found IP, its driver name rides along as `model`.
+ipcMain.handle('siamshop:scan-printers', async () => {
+  try {
+    const r = await printerScan.scanPrinters({});
+    let osPrinters = [];
+    try { osPrinters = (mainWindow && !mainWindow.isDestroyed()) ? await mainWindow.webContents.getPrintersAsync() : []; } catch (_) {}
+    r.printers = r.printers.map((p) => {
+      const q = osPrinters.find((o) => JSON.stringify(o.options || {}).includes(p.ip) || String(o.name).includes(p.ip.replace(/\./g, '_')));
+      return { ...p, model: q ? printerLabel(q).model : '' };
+    });
+    return r;
+  } catch (e) {
+    return { printers: [], error: e.message };
+  }
 });
 // OS printer list — helps the operator pick a USB printer NAME on Admin → This device.
+// Staff-readable label for an OS printer: the DRIVER name (e.g. "EPSON TM-T20III")
+// rather than the CUPS queue ("_192_168_68_54"), which means nothing at a counter.
+function printerLabel(p) {
+  const opts = p.options || {};
+  const model = String(opts['printer-make-and-model'] || p.description || '').trim();
+  const display = String(p.displayName || '').trim();
+  const queue = String(p.name || '');
+  const looksLikeQueue = !display || display === queue || /^_?\d{1,3}([._]\d{1,3}){3}$/.test(display); // "_192_168_68_54" or "192.168.68.54"
+  const label = (!looksLikeQueue && display) || model || queue;
+  const uri = String(opts['device-uri'] || '');
+  return { label, model, queue, uri };
+}
 ipcMain.handle('siamshop:list-printers', async () => {
   try {
     if (!mainWindow || mainWindow.isDestroyed()) return [];
     const printers = await mainWindow.webContents.getPrintersAsync();
-    return printers.map((p) => ({ name: p.name, displayName: p.displayName || p.name, isDefault: !!p.isDefault }));
+    return printers.map((p) => ({ name: p.name, displayName: p.displayName || p.name, isDefault: !!p.isDefault, ...printerLabel(p) }));
   } catch (e) {
     return [];
   }
@@ -432,10 +509,17 @@ function createWindow() {
       }
       setTimeout(async () => {
         try {
+          // Optional: press a button by its text before the capture (e.g. "Find printers")
+          // and wait for it to finish — lets the canary exercise a real IPC path.
+          if (process.env.SIAMSHOP_CANARY_CLICK_TEXT) {
+            const clicked = await mainWindow.webContents.executeJavaScript(`(() => { const t = ${JSON.stringify(process.env.SIAMSHOP_CANARY_CLICK_TEXT)}; const b = [...document.querySelectorAll('button')].find((x) => x.textContent.includes(t)); if (b) b.click(); return !!b; })()`, true);
+            console.log('[canary] clicked', JSON.stringify(process.env.SIAMSHOP_CANARY_CLICK_TEXT), clicked);
+            await new Promise((r) => setTimeout(r, Number(process.env.SIAMSHOP_CANARY_CLICK_WAIT_MS) || 8000));
+          }
           const diag = await mainWindow.webContents.executeJavaScript(`(async () => {
             const tok = localStorage.getItem('siamshop_admin_token') || '';
             let me = null; try { const r = await fetch((window.electron?.config?.cloudApiUrl || '') + '/api/admin/me?shop=' + (window.electron?.config?.shopSlug || ''), { headers: { Authorization: 'Bearer ' + tok } }); me = r.status + ' ' + (await r.text()).slice(0, 80); } catch (e) { me = 'ERR ' + e.message; }
-            return { href: location.href, hasToken: !!tok, staff: localStorage.getItem('siamshop_staff'), me, text: document.body.innerText.slice(0, 160).split(String.fromCharCode(10)).join(' / ') };
+            return { href: location.href, hasToken: !!tok, staff: localStorage.getItem('siamshop_staff'), me, text: document.body.innerText.slice(0, Number(${JSON.stringify(process.env.SIAMSHOP_CANARY_TEXT_LEN || '160')})).split(String.fromCharCode(10)).join(' / ') };
           })()`, true);
           console.log('[canary] diag:', JSON.stringify(diag));
           const img = await mainWindow.capturePage();

@@ -37,22 +37,71 @@ function chromeBin() {
 // Stub of electron/preload.js — same surface as client/src/electron.js expects.
 // Cloud URL points at a closed port so API calls fail fast (a fetch error must
 // never blank the screen either).
-const SHIM = `<script>
+const shim = (apiUrl, authed) => `<script>
+${authed ? `try { localStorage.setItem('siamshop_admin_token', 'smoke-token'); localStorage.setItem('siamshop_staff', JSON.stringify({ name: 'Smoke Manager', role: 'manager', sid: 1 })); } catch (e) {}` : `try { localStorage.clear(); } catch (e) {}`}
 window.electron = {
   isElectron: true, platform: 'smoke',
-  config: { shopName: 'Smoke Shop', cloudApiUrl: 'http://127.0.0.1:1', shopSlug: 'demo', printer: { ip: '', port: 9100, autoPrint: false, kickDrawerOnCash: false }, labelPrinter: '' },
-  getConfig: async () => ({ shop_name: 'Smoke Shop', cloud_api_url: 'http://127.0.0.1:1', shop_slug: 'demo', printer: {} }),
+  config: { shopName: 'Smoke Shop', cloudApiUrl: '${apiUrl}', shopSlug: 'demo', printer: { ip: '', port: 9100, autoPrint: false, kickDrawerOnCash: false }, labelPrinter: '', scanner: { suffix: 'enter', captureAnywhere: true } },
+  getConfig: async () => ({ shopName: 'Smoke Shop', cloudApiUrl: '${apiUrl}', shopSlug: 'demo', printer: { ip: '', port: 9100, name: '', lprQueue: 'lp', autoPrint: true, kickDrawerOnCash: true }, scanner: { suffix: 'enter', captureAnywhere: true }, version: '0.0.0-smoke' }),
   saveConfig: async () => ({ success: true }), readClipboard: async () => '', pickConfigFile: async () => null, resetConfig: () => {},
   printReceipt: async () => ({ ok: false, error: 'smoke' }), kickDrawer: async () => ({ ok: false }), printZ: async () => ({ ok: false }),
-  testPrint: async () => ({ ok: false }), listPrinters: async () => [], printLabel: async () => ({ ok: false }),
+  testPrint: async () => ({ ok: false }), listPrinters: async () => [{ name: '_192_168_68_54', displayName: '_192_168_68_54', label: 'POS-80', model: 'POS-80', queue: '_192_168_68_54', isDefault: true }], printLabel: async () => ({ ok: false }),
+  scanPrinters: async () => ({ subnet: '10.0.0.0/24', printers: [{ ip: '10.0.0.50', port: 9100, model: '' }] }),
   getVersion: async () => '0.0.0-smoke', checkForUpdates: async () => ({ ok: false, reason: 'smoke' }), restartToUpdate: () => {},
   onUpdateStatus: () => {}, quitApp: () => {},
 };
 </script>`;
 
-const ROUTES = ['#/', '#/till', '#/admin', '#/prep', '#/scan', '#/shop'];
+// Routes. Unauthed ones show the PIN pad / storefront; AUTHED ones run with a
+// stub staff session + a fake API (below), so the screens BEHIND the gate
+// render too — Till, Prep and every Admin section (DEVICE-001 lesson: the
+// device/brand cards never appeared in the unauthed smoke).
+const ROUTES = [
+  { hash: '#/', authed: false, expect: /Enter your PIN|Till sign in/ },
+  { hash: '#/till', authed: false, expect: /Enter your PIN/ },
+  { hash: '#/shop', authed: false },
+  { hash: '#/till', authed: true, expect: /Scan barcode|till-scan/, forbid: /Enter your PIN/ },
+  { hash: '#/prep', authed: true, forbid: /Enter your PIN/ },
+  { hash: '#/scan', authed: true },
+  ...['dashboard', 'reports', 'products', 'categories', 'orders', 'customers', 'staff', 'settings', 'device'].map((t) => ({ hash: `#/admin?tab=${t}`, authed: true, forbid: /Enter your PIN|Manager or owner only/ })),
+];
+// Minimal JSON the screens need to draw with an empty shop. Anything not
+// listed gets [] — a screen that crashes on empty data is a real bug.
+const FAKE_API = {
+  '/api/health': { status: 'ok', db: 'ok', stripe: 'unconfigured' },
+  '/api/staff/me': { role: 'manager', name: 'Smoke Manager', sid: 1 },
+  '/api/admin/me': { ok: true, role: 'manager', name: 'Smoke Manager' },
+  '/api/settings': { minimum_order_amount: 0, currency: 'GBP', discount_reasons: ['Staff'], receipt_copies: 1, opening_hours: null, open_now: true, collection_enabled: false, brand_primary: '', brand_accent: '', brand_logo: '', receipt_show_logo: false },
+  '/api/admin/settings': { minimum_order_amount: '0', receipt_header: '', receipt_footer: '', vat_number: '', receipt_copies: '1' },
+  '/api/admin/shop': { id: 1, name: 'Smoke Shop', slug: 'demo' },
+  '/api/shop': { id: 1, name: 'Smoke Shop', slug: 'demo' },
+  '/api/till/session': { session: null, summary: null },
+  '/api/admin/report': { range: {}, totals: { gross: 0, count: 0 }, by_channel: [], by_payment: [], by_day: [], top_products: [], discounts: { total: 0, by_reason: [], by_staff: [] }, refunds: { count: 0, total: 0, by_reason: [] }, voids: { count: 0, total: 0 }, wastage: { value: 0, items: [] } },
+  '/api/admin/stats': { today: { gross: 0, count: 0 }, week: [], low_stock: [], recent: [] },
+  '/api/sales/summary': { totals: { gross: 0, order_count: 0, cash: 0, card: 0 }, by_payment: [], by_channel: [] },
+  '/api/prep': { orders: [] },
+  '/api/admin/dashboard': { counts: { products: 0, orders: 0, customers: 0, low_stock: 0, pending: 0, active_products: 0, out_of_stock: 0 }, sales: { day: { gross: 0, count: 0 }, week: { gross: 0, count: 0 }, month: { gross: 0, count: 0 }, all: { gross: 0, count: 0 } }, sales_7d: [], top_products: [], by_channel: [], low_stock: [], recent_orders: [] },
+  '/api/refund-reasons': { refund: [], void: [], restock: [] },
+  '/api/pickup-slots': { asap: true, slots: [] },
+  '/api/clock/status': { clocked_in: [] },
+};
+function startFakeApi() {
+  const srv = createServer((req, res) => {
+    const p = req.url.split('?')[0];
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Headers', 'Authorization, Content-Type');
+    res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS');
+    if (req.method === 'OPTIONS') { res.writeHead(204); return res.end(); }
+    res.setHeader('Content-Type', 'application/json');
+    const hit = FAKE_API[p];
+    res.writeHead(200);
+    res.end(JSON.stringify(hit !== undefined ? hit : []));
+  });
+  return new Promise((r) => srv.listen(0, '127.0.0.1', () => r(srv)));
+}
 const MIME = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.png': 'image/png', '.json': 'application/json', '.webmanifest': 'application/manifest+json', '.woff2': 'font/woff2' };
 
+let apiUrl = 'http://127.0.0.1:1';
 async function main() {
   if (!noBuild) {
     console.log('— building Electron client (ELECTRON_BUILD=1, empty VITE_API_BASE)');
@@ -67,7 +116,8 @@ async function main() {
   const server = createServer((req, res) => {
     let p = decodeURIComponent(req.url.split('?')[0].split('#')[0]);
     if (p === '/' || p === '/index.html') {
-      const html = readFileSync(path.join(dist, 'index.html'), 'utf8').replace(/<script type="module"/, `${SHIM}\n    <script type="module"`);
+      const authed = /(^|[?&])authed=1/.test(req.url.split('#')[0]);
+      const html = readFileSync(path.join(dist, 'index.html'), 'utf8').replace(/<script type="module"/, `${shim(apiUrl, authed)}\n    <script type="module"`);
       res.writeHead(200, { 'Content-Type': 'text/html' }); return res.end(html);
     }
     const file = path.join(dist, p);
@@ -75,6 +125,8 @@ async function main() {
     res.writeHead(200, { 'Content-Type': MIME[path.extname(file)] || 'application/octet-stream' });
     res.end(readFileSync(file));
   });
+  const fake = await startFakeApi();
+  apiUrl = `http://127.0.0.1:${fake.address().port}`;
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const port = server.address().port;
 
@@ -82,7 +134,7 @@ async function main() {
   // timers alive, so each run ends on our own kill (30 s). Run the routes in
   // PARALLEL (separate profiles) so the whole smoke stays ~30 s.
   const results = await Promise.all(ROUTES.map(async (route, idx) => {
-    const url = `http://127.0.0.1:${port}/index.html${route}`;
+    const url = `http://127.0.0.1:${port}/index.html${route.authed ? '?authed=1' : ''}${route.hash}`;
     const args = ['--headless=new', '--disable-gpu', '--no-sandbox', '--no-first-run', '--enable-logging=stderr', '--v=0',
       '--virtual-time-budget=5000', '--timeout=8000', '--window-size=1280,800', `--user-data-dir=${path.join(root, 'client', '.smoke-profile', String(idx))}`, '--dump-dom', url];
     const out = await new Promise((resolve) => {
@@ -102,12 +154,17 @@ async function main() {
     const uncaught = out.se.split('\n').filter((l) => /CONSOLE/.test(l) && /Uncaught|ChunkLoadError|Minified React error|\[siamshop\] render error/.test(l));
     const rootHtml = (out.so.match(/<div id="root">([\s\S]*?)<\/div>\s*<\/body>/) || [])[1] || '';
     const boundary = /Something went wrong on this screen/.test(rootHtml);
-    return { route, uncaught, rootHtml, boundary, ok: uncaught.length === 0 && rootHtml.trim().length > 40 && !boundary };
+    const text = rootHtml.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+    const expectOk = !route.expect || route.expect.test(rootHtml);
+    const forbidOk = !route.forbid || !route.forbid.test(text);
+    return { route, uncaught, rootHtml, boundary, expectOk, forbidOk, ok: uncaught.length === 0 && rootHtml.trim().length > 40 && !boundary && expectOk && forbidOk };
   }));
+  fake.close();
   let fail = 0;
-  for (const { route, uncaught, rootHtml, boundary, ok } of results) {
-    console.log(`  ${ok ? '✅' : '❌'} ${route.padEnd(8)} root=${rootHtml.trim().length}ch${boundary ? ' ERROR-BOUNDARY' : ''}${uncaught.length ? ` uncaught=${uncaught.length}` : ''}`);
-    if (!ok) { fail++; for (const l of uncaught.slice(0, 5)) console.log('     ', l.trim().slice(0, 300)); if (!rootHtml.trim().length) console.log('      (empty #root — blank window)'); if (boundary) console.log('      ', rootHtml.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').slice(0, 300)); }
+  for (const { route, uncaught, rootHtml, boundary, expectOk, forbidOk, ok } of results) {
+    const label = `${route.hash}${route.authed ? ' (signed in)' : ''}`;
+    console.log(`  ${ok ? '✅' : '❌'} ${label.padEnd(30)} root=${rootHtml.trim().length}ch${boundary ? ' ERROR-BOUNDARY' : ''}${uncaught.length ? ` uncaught=${uncaught.length}` : ''}${!expectOk ? ' EXPECTED-TEXT-MISSING' : ''}${!forbidOk ? ' STILL-ON-GATE' : ''}`);
+    if (!ok) { fail++; for (const l of uncaught.slice(0, 5)) console.log('     ', l.trim().slice(0, 300)); if (!rootHtml.trim().length) console.log('      (empty #root — blank window)'); if (boundary || !expectOk || !forbidOk) console.log('      ', rootHtml.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').slice(0, 300)); }
   }
   server.close();
   console.log(fail ? `\n❌ ${fail} route(s) failed to render` : `\n✅ all ${ROUTES.length} routes rendered`);

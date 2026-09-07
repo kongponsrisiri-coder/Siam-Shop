@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { Routes, Route, Link, Navigate } from 'react-router-dom';
 import { useCart } from './cart.jsx';
 import { useLang, useT } from './lang.jsx';
@@ -16,6 +16,8 @@ import OrderStatusScreen from './screens/OrderStatusScreen.jsx';
 import AccountScreen from './screens/AccountScreen.jsx';
 import PrepScreen from './screens/PrepScreen.jsx';
 import { isElectron } from './electron.js';
+import { api } from './api.js';
+import { applyBrandTheme } from './theme.js';
 
 function LangToggle() {
   const { lang, toggle } = useLang();
@@ -69,6 +71,8 @@ function TopBar() {
 }
 
 export default function App() {
+  // Per-shop brand (SIAMSHOP-DEVICE-001): colours + logo from shop settings.
+  useEffect(() => { api.getSettings().then(applyBrandTheme).catch(() => {}); }, []);
   return (
     <Routes>
       {/* Till and scanner are focused full-screen surfaces with their own headers. */}

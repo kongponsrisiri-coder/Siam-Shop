@@ -13,6 +13,8 @@ export const desktop = {
   printZ: (z, shopName) => (isElectron ? window.electron.printZ({ z, shopName }) : Promise.resolve({ ok: false, error: 'not-desktop' })),
   testPrint: (printer) => (isElectron ? window.electron.testPrint(printer) : Promise.resolve({ ok: false, error: 'not-desktop' })),
   listPrinters: () => (isElectron ? window.electron.listPrinters() : Promise.resolve([])),
+  // Find network receipt printers on the till's LAN (SIAMSHOP-DEVICE-001 D1).
+  scanPrinters: () => (isElectron && window.electron.scanPrinters ? window.electron.scanPrinters() : Promise.resolve({ printers: [], message: 'Scanning only works in the desktop app.' })),
   // Parcel labels (SIAMSHOP-POST-001) — HTML → OS driver, 4×6 in.
   printLabel: (html, copies = 1) => (isElectron ? window.electron.printLabel({ html, copies }) : Promise.resolve({ ok: false, error: 'not-desktop' })),
   getConfig: () => (isElectron ? window.electron.getConfig() : Promise.resolve({})),
