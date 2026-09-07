@@ -71,6 +71,8 @@ check('claim → payload with only the prep item + 1 other item', r.status === 2
 const ticket = r.data.ticket;
 r = await req('POST', `/api/prep/tickets/${ticketId}/claim`, { device_id: 'till-2' }, cashTok);
 check('second till claiming the same ticket → 409', r.status === 409 && r.data.code === 'claimed');
+r = await req('POST', '/api/prep/tickets/999999/claim', { device_id: 'till-2' }, cashTok);
+check('claiming a ticket that does not exist → 404 (Krit)', r.status === 404);
 await ps.printPrepTicket({ ip: '127.0.0.1', port: 19202 }, ticket);
 r = await req('POST', `/api/prep/tickets/${ticketId}/ack`, { device_id: 'till-2', ok: true }, cashTok);
 check('ack from a device that did not claim → 409', r.status === 409);

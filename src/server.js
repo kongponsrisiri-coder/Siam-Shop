@@ -3604,7 +3604,11 @@ app.post('/api/prep/tickets/:id/claim', requireAuth, async (req, res) => {
     const deviceId = deviceIdOf(req);
     if (!deviceId) return res.status(400).json({ error: 'device_id required' });
     const c = await prepTickets.claim(pool, shopId, req.params.id, deviceId);
-    if (!c) return res.status(409).json({ error: 'Already printing or printed on another till', code: 'claimed' });
+    if (!c) {
+      const { rows: ex } = await pool.query(`SELECT id FROM prep_tickets WHERE id = $1 AND shop_id = $2`, [req.params.id, shopId]);
+      if (!ex[0]) return res.status(404).json({ error: 'Ticket not found' });
+      return res.status(409).json({ error: 'Already printing or printed on another till', code: 'claimed' });
+    }
     res.json({ claimed: true, attempts: c.attempts, ticket: await prepTickets.payload(pool, shopId, req.params.id) });
   } catch (err) {
     console.error('[prep/tickets claim]', err.message);
