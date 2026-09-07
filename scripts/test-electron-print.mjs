@@ -64,6 +64,7 @@ function fakeLpr(port) {
 }
 
 const sample = {
+  style: 'classic', // classic path under test here; rendered has its own suite
   shopName: 'Cha & Pinto Box', address: '16 London Rd, Guildford GU1 2AF', orderId: 42, staff: 'Nok', fulfilment: 'takeaway',
   items: [
     { name: 'Rice Lunch Box', qty: 1, unit_price: 11.7, line_total: 11.7, options: ['Large', 'Spicy Chilli Basil Pork', 'Fried Chicken + Panang Curry Sauce', 'Crispy Fried Egg'] },

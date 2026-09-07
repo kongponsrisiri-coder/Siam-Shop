@@ -204,6 +204,19 @@ export default function SettingsSection() {
                   <label>VAT number (blank = not shown)</label>
                   <input value={form.vat_number ?? ''} onChange={(e) => set('vat_number', e.target.value)} placeholder="GB 123 4567 89" />
                 </div>
+                <div style={{ flex: '1 1 170px' }}>
+                  <label>Print style</label>
+                  <select value={form.receipt_style ?? 'rendered'} onChange={(e) => set('receipt_style', e.target.value)}>
+                    <option value="rendered">Printed as a picture (Thai, logo)</option>
+                    <option value="classic">Printer's own font (fastest)</option>
+                  </select>
+                </div>
+                <div style={{ flex: '1 1 110px' }}>
+                  <label>Text size</label>
+                  <select value={form.print_size ?? 'normal'} onChange={(e) => set('print_size', e.target.value)}>
+                    <option value="normal">Normal</option><option value="large">Large</option>
+                  </select>
+                </div>
                 <div style={{ flex: '1 1 100px' }}>
                   <label>Copies per sale</label>
                   <select value={form.receipt_copies ?? '1'} onChange={(e) => set('receipt_copies', e.target.value)}>
@@ -220,6 +233,8 @@ export default function SettingsSection() {
               logo={form.brand_logo}
               showLogo={form.receipt_show_logo === '1' || form.receipt_show_logo === true || form.receipt_show_logo === 'true'}
               invert={form.brand_logo_invert === '1' || form.brand_logo_invert === true || form.brand_logo_invert === 'true'}
+              style={form.receipt_style || 'rendered'}
+              size={form.print_size || 'normal'}
             />
           </div>
 

@@ -76,7 +76,8 @@ console.log('— D4 raster: pixels → GS v 0');
   // full path over the fake 9100 rig: printReceipt sends the raster bytes
   const jobs = [];
   const srv = await listen(19150, (sock) => { const c = []; sock.on('data', (d) => c.push(d)); sock.on('close', () => jobs.push(Buffer.concat(c))); });
-  await ps.printReceipt({ ip: '127.0.0.1', port: 19150 }, { shopName: 'Logo Shop', orderId: 2, items: [], subtotal: 0, total: 0, logoRaster: cmd });
+  // The separate logo raster belongs to the classic path; rendered receipts draw the logo INTO the image (PRINT-RENDER-001).
+await ps.printReceipt({ ip: '127.0.0.1', port: 19150 }, { style: 'classic', shopName: 'Logo Shop', orderId: 2, items: [], subtotal: 0, total: 0, logoRaster: cmd });
   await new Promise((r) => setTimeout(r, 200));
   check('fake 9100 job contains the raster header + 4 data bytes', jobs[0] && jobs[0].indexOf(Buffer.from([0x1d, 0x76, 0x30, 0x00, 2, 0, 2, 0, 0xff, 0xff, 0x10, 0x00])) > 0);
   await new Promise((res) => srv.close(res));

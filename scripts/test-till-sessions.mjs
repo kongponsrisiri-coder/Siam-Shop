@@ -6,6 +6,8 @@ import net from 'node:net';
 import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const ps = require('../electron/printService.js');
+// The Z check reads text, so it pins the classic (printer-font) path; the
+// rendered picture has its own suite in test-print-render.mjs.
 
 const BASE = process.env.BASE || 'http://localhost:4999';
 const PASS = process.env.ADMIN_PASSWORD || 'test-pass-123';
@@ -107,7 +109,7 @@ console.log('— Z print via fake 9100');
 const jobs = [];
 const srv = net.createServer((sock) => { const c = []; sock.on('data', (d) => c.push(d)); sock.on('close', () => jobs.push(Buffer.concat(c))); });
 await new Promise((res) => srv.listen(19120, '127.0.0.1', res));
-await ps.printZReport({ ip: '127.0.0.1', port: 19120 }, z, 'Cha & Pinto Box');
+await ps.printZReport({ ip: '127.0.0.1', port: 19120 }, z, 'Cha & Pinto Box', { style: 'classic' });
 await new Promise((res) => setTimeout(res, 200));
 const text = (jobs[0] || Buffer.alloc(0)).toString('latin1').replace(/\x1b@|\x1bt.|\x1b%.|\x1b!.|\x1bM.|\x1bG.|\x1ba.|\x1bE.|\x1d!.|\x1dVA./g, '').replace(/\x9c/g, '£');
 check('Z printed: title + session + variance + expected + refunds', /Z REPORT/.test(text) && new RegExp(`Session #${sid}`).test(text) && /VARIANCE\s+-£2\.50/.test(text) && /EXPECTED/.test(text) && /Refunds \(1\)/.test(text), text.slice(0, 400));

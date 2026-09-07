@@ -1071,6 +1071,10 @@ app.get('/api/settings', async (req, res) => {
       vat_number: s.vat_number || '',
       receipt_copies: Math.min(3, Math.max(1, parseInt(s.receipt_copies, 10) || 1)),
       receipt_show_logo: s.receipt_show_logo === '1' || s.receipt_show_logo === 'true',
+      // SIAMSHOP-PRINT-RENDER-001 — tickets are drawn with a real typeface by
+      // default; 'classic' falls back to the printer's own font.
+      receipt_style: s.receipt_style === 'classic' ? 'classic' : 'rendered',
+      print_size: s.print_size === 'large' ? 'large' : 'normal',
       // SIAMSHOP-DEVICE-001 — per-shop brand (theme.js applies; Logo swaps).
       brand_primary: BRAND_HEX.test(s.brand_primary || '') ? s.brand_primary : '',
       brand_accent: BRAND_HEX.test(s.brand_accent || '') ? s.brand_accent : '',
@@ -1911,6 +1915,12 @@ app.put('/api/admin/settings', requireAuth, async (req, res) => {
       }
       if (key === 'brand_logo' && value !== '' && !isLogoDataUrl(String(value))) {
         return res.status(400).json({ error: 'Logo must be a PNG/JPEG/WebP image under 400 KB' });
+      }
+      if (key === 'receipt_style' && !['rendered', 'classic'].includes(String(value))) {
+        return res.status(400).json({ error: "receipt_style must be 'rendered' or 'classic'" });
+      }
+      if (key === 'print_size' && !['normal', 'large'].includes(String(value))) {
+        return res.status(400).json({ error: "print_size must be 'normal' or 'large'" });
       }
       await pool.query(
         `INSERT INTO shop_settings (shop_id, key, value) VALUES ($1,$2,$3)
@@ -3451,6 +3461,47 @@ app.get('/api/admin/report', requireAuth, async (req, res) => {
 // ---------------------------------------------------------------------------
 // Admin CRM — customers + spending (SIAMSHOP-006)
 // ---------------------------------------------------------------------------
+// Receipt preview (SIAMSHOP-PRINT-RENDER-001). Renders a SAMPLE sale through
+// exactly the same code the printer uses, so what the owner sees in Settings is
+// what comes out of the machine. pureimage is pure JS, so this works server-side
+// for the web admin as well as over IPC in the desktop app.
+function sampleReceipt(settings, shop) {
+  return {
+    shopName: (shop && shop.name) || 'SiamShop',
+    header: settings.receipt_header || '',
+    footer: settings.receipt_footer || '',
+    vatNote: settings.vat_number ? `VAT No. ${settings.vat_number}` : '',
+    orderId: 1234, staff: 'Nok', createdAt: new Date().toISOString(), fulfilment: 'takeaway',
+    items: [
+      { name: 'Rice Lunch Box', qty: 1, line_total: 11.7, gross: 11.7, unit_price: 11.7, options: ['Large', 'Spicy Chilli Basil Pork'] },
+      { name: 'ผัดไทยกุ้งสด Pad Thai Prawn', qty: 2, line_total: 17.9, unit_price: 8.95, options: [] },
+      { name: 'Tiparos Fish Sauce 300ml', qty: 2, line_total: 3, unit_price: 1.5, options: [] },
+    ],
+    subtotal: 32.6, total: 32.6, payment_method: 'cash', amount_tendered: 40, change_given: 7.4,
+    logo: settings.brand_logo || '', showLogo: settings.receipt_show_logo === '1' || settings.receipt_show_logo === 'true',
+    logoInvert: settings.brand_logo_invert === '1' || settings.brand_logo_invert === 'true',
+    style: settings.receipt_style === 'classic' ? 'classic' : 'rendered',
+    size: settings.print_size === 'large' ? 'large' : 'normal',
+  };
+}
+app.post('/api/admin/receipt-preview', requireAuth, requireManager, async (req, res) => {
+  try {
+    const shopId = await resolveShopId(req);
+    if (!shopId) return res.status(404).json({ error: 'Shop not found' });
+    const saved = await getSettings(shopId);
+    const settings = { ...saved, ...(req.body || {}) }; // preview unsaved edits
+    const { rows } = await pool.query(`SELECT id, name FROM shops WHERE id = $1`, [shopId]);
+    const r = sampleReceipt(settings, rows[0]);
+    if (r.style === 'classic') return res.json({ style: 'classic' });
+    const render = require('../electron/ticketRender');
+    const png = await render.receiptPNG(r, { size: r.size, logo: r.showLogo ? r.logo : null, invert: r.logoInvert });
+    res.json({ style: 'rendered', size: r.size, png: `data:image/png;base64,${png.toString('base64')}` });
+  } catch (err) {
+    console.error('[receipt-preview]', err.message);
+    res.status(500).json({ error: 'Could not render the preview' });
+  }
+});
+
 // ---------------------------------------------------------------------------
 // Printers (SIAMSHOP-PRINTERS-001): shop-wide list with jobs; prep tickets queue.
 // ---------------------------------------------------------------------------

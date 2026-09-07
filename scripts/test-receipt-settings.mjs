@@ -35,6 +35,7 @@ const jobs = [];
 const srv = net.createServer((sock) => { const c = []; sock.on('data', (d) => c.push(d)); sock.on('close', () => jobs.push(Buffer.concat(c))); });
 await new Promise((res) => srv.listen(19130, '127.0.0.1', res));
 const payload = {
+  style: 'classic', // this suite checks the printer-font layout (PRINT-RENDER-001 default is rendered)
   shopName: 'Cha & Pinto Box', header: pub.receipt_header, footer: pub.receipt_footer, vatNote: `VAT No. ${pub.vat_number}`,
   orderId: 77, staff: 'Nok', createdAt: new Date().toISOString(), fulfilment: 'takeaway',
   items: [{ name: 'Tiparos Fish Sauce 300ml', qty: 1, unit_price: 1.5, line_total: 1.5, options: [] }],

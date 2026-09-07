@@ -27,6 +27,7 @@ contextBridge.exposeInMainWorld('electron', {
   testPrint: (printer) => ipcRenderer.invoke('siamshop:test-print', printer),
   listPrinters: () => ipcRenderer.invoke('siamshop:list-printers'),
   scanPrinters: () => ipcRenderer.invoke('siamshop:scan-printers'),
+  previewReceipt: (payload) => ipcRenderer.invoke('siamshop:preview-receipt', payload),
   // Parcel label (SIAMSHOP-POST-001): rendered HTML → hidden window → OS driver at 4×6 in.
   printLabel: (payload) => ipcRenderer.invoke('siamshop:print-label', payload),
   // Updates

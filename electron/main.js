@@ -28,14 +28,22 @@ const PROJECT_ROOT = path.resolve(__dirname, '..');
 // missing module in app.asar (v0.1.5/v0.1.6 crashed on launch) fails the build.
 if (process.argv.includes('--self-test')) {
   try {
-    for (const m of ['./printService', './printerScan', './raster']) require(m);
+    for (const m of ['./printService', './printerScan', './raster', './ticketRender']) require(m);
     require.resolve('./preload');
     const idx = app.isPackaged ? path.join(process.resourcesPath, 'client-dist', 'index.html') : path.join(PROJECT_ROOT, 'client', 'dist-electron', 'index.html');
     if (!fs.existsSync(idx)) throw new Error('client index missing: ' + idx);
     const html = fs.readFileSync(idx, 'utf8');
     if (!/<script type="module"[^>]+src="\.\/assets\/index-[^"]+\.js"/.test(html)) throw new Error('client index has no bundle script');
-    console.log(`SELFTEST OK ${app.getVersion()} packaged=${app.isPackaged}`);
-    app.exit(0);
+    // Render one real line: catches a missing fonts/ dir inside the asar, which
+    // no module check would see (SIAMSHOP-PRINT-RENDER-001).
+    require('./ticketRender').renderRaster([{ text: 'SELFTEST ผัดไทย £1.50', size: 20 }], { size: 'normal' })
+      .then((buf) => {
+        if (!buf || buf.length < 64 || buf[0] !== 0x1d) throw new Error('rendered raster looks wrong');
+        console.log(`SELFTEST OK ${app.getVersion()} packaged=${app.isPackaged} render=${buf.length}b`);
+        app.exit(0);
+      })
+      .catch((e) => { console.error('SELFTEST FAIL render: ' + (e && e.stack || e)); app.exit(2); });
+    return;
   } catch (e) {
     console.error('SELFTEST FAIL ' + (e && e.stack || e));
     app.exit(2);
@@ -241,7 +249,7 @@ ipcMain.handle('siamshop:print-receipt', async (event, payload) => {
 });
 ipcMain.handle('siamshop:print-z', async (event, payload) => {
   try {
-    await printService.printZReport(printerCfg(payload?.dest), payload?.z || {}, payload?.shopName || rendererConfig().shopName || 'SiamShop');
+    await printService.printZReport(printerCfg(payload?.dest), payload?.z || {}, payload?.shopName || rendererConfig().shopName || 'SiamShop', payload?.opts);
     return { ok: true };
   } catch (e) {
     return { ok: false, error: e.message };
@@ -262,7 +270,7 @@ ipcMain.handle('siamshop:test-print', async (event, printer) => {
   const saved = printerCfg();
   const target = printer || saved;
   const isSaved = !printer || (String(printer.ip || '') === saved.ip && String(printer.name || '') === saved.name);
-  try { await printService.testPrint(target); if (isSaved) recordTest(true); return { ok: true }; }
+  try { await printService.testPrint(target, printer && printer.opts); if (isSaved) recordTest(true); return { ok: true }; }
   catch (e) { if (isSaved) recordTest(false); return { ok: false, error: e.message }; }
 });
 // "Find printers" (SIAMSHOP-DEVICE-001 D1): sweep the LAN for port-9100 responders.
@@ -275,6 +283,17 @@ ipcMain.handle('siamshop:print-prep', async (event, payload) => {
     if (!dest || !(dest.ip || dest.name)) return { ok: false, error: 'No prep printer' };
     await printService.printPrepTicket(printerCfg(dest), ticket);
     return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+// Settings preview (SIAMSHOP-PRINT-RENDER-001): the SAME renderer the printer
+// uses, so the picture in Settings is the print.
+ipcMain.handle('siamshop:preview-receipt', async (event, payload) => {
+  try {
+    const r = payload || {};
+    const png = await require('./ticketRender').receiptPNG(r, { size: r.size, logo: r.showLogo ? r.logo : null, invert: r.logoInvert });
+    return { ok: true, png: `data:image/png;base64,${png.toString('base64')}` };
   } catch (e) {
     return { ok: false, error: e.message };
   }
