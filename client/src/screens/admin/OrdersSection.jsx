@@ -4,6 +4,8 @@ import { maskName, maskEmail, maskAddress } from '../../demo.js';
 import { isElectron } from '../../electron.js';
 import PrintLabelButton from '../../components/PrintLabelButton.jsx';
 import PrintReceiptButton from '../../components/PrintReceiptButton.jsx';
+import RefundModal from '../../components/RefundModal.jsx';
+import { staffSession } from '../../api.js';
 
 // Clear, combined payment + fulfilment state for the list.
 function orderState(o) {
@@ -38,6 +40,10 @@ function OrderDetail({ id, onBack, onChanged }) {
   const [carrier, setCarrier] = useState('');
   const [carrierList, setCarrierList] = useState([]);
   const [busy, setBusy] = useState(false);
+  const [refunds, setRefunds] = useState([]);
+  const [refundOpen, setRefundOpen] = useState(false);
+  const me = staffSession.get();
+  const isManager = !me || me.role === 'manager' || me.role === 'admin';
 
   async function load() {
     setError('');
@@ -46,6 +52,7 @@ function OrderDetail({ id, onBack, onChanged }) {
       setOrder(o);
       setTracking(o.tracking_number || '');
       setCarrier(o.carrier || '');
+      api.adminOrderRefunds(id).then(setRefunds).catch(() => setRefunds([]));
     } catch (e) {
       setError(e.message);
     }
@@ -118,7 +125,8 @@ function OrderDetail({ id, onBack, onChanged }) {
   }
 
   async function cancel() {
-    if (!confirm('Cancel this order? If it was paid, stock will be restored.')) return;
+    if (order.payment_status === 'paid') return setRefundOpen(true); // paid → refund flow (reason + manager)
+    if (!confirm('Cancel this unpaid order?')) return;
     setBusy(true);
     setError('');
     try {
@@ -258,12 +266,38 @@ function OrderDetail({ id, onBack, onChanged }) {
           {order.payment_method === 'bank_transfer' && order.payment_status !== 'paid' && order.status !== 'cancelled' && (
             <button className="btn secondary" disabled={busy} onClick={markPaid}>Mark as paid</button>
           )}
-          {order.status !== 'cancelled' && order.status !== 'dispatched' && (
+          {order.payment_status === 'paid' && Number(order.refunded_amount || 0) < Number(order.total) - 0.005 && (
+            <button className="btn cancel-btn" disabled={busy} onClick={() => setRefundOpen(true)}>↩ Refund…</button>
+          )}
+          {order.status !== 'cancelled' && order.status !== 'dispatched' && order.payment_status !== 'paid' && (
             <button className="btn cancel-btn" disabled={busy} onClick={cancel}>Cancel order</button>
           )}
           {order.status === 'cancelled' && <span className="tag off">Cancelled</span>}
+          {order.payment_status === 'refunded' && <span className="tag off">Refunded</span>}
+          {Number(order.refunded_amount) > 0 && order.payment_status === 'paid' && <span className="tag off">Part refunded £{Number(order.refunded_amount).toFixed(2)}</span>}
         </div>
+        {refunds.length > 0 && (
+          <div style={{ marginTop: 12 }}>
+            <h4 style={{ margin: '0 0 6px' }}>Refund history</h4>
+            <table>
+              <thead><tr><th>When</th><th>Amount</th><th>By</th><th>Reason</th><th>Stock</th><th>Items</th></tr></thead>
+              <tbody>
+                {refunds.map((r) => (
+                  <tr key={r.id}>
+                    <td className="muted">{new Date(r.created_at).toLocaleString()}</td>
+                    <td>£{Number(r.amount).toFixed(2)} <span className="muted">({r.method})</span></td>
+                    <td>{r.staff}{r.approved_by ? <div className="muted" style={{ fontSize: 12 }}>approved by {r.approved_by}</div> : ''}</td>
+                    <td>{r.reason}{r.note ? <div className="muted" style={{ fontSize: 12 }}>{r.note}</div> : ''}</td>
+                    <td><span className={`tag ${r.stock_action === 'restock' ? 'ok' : 'off'}`}>{r.stock_action === 'restock' ? 'restocked' : 'written off'}</span></td>
+                    <td className="muted" style={{ fontSize: 12 }}>{(r.items || []).map((i) => `${i.qty}× ${i.name}`).join(', ')}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
+      {refundOpen && <RefundModal order={order} isManager={isManager} onClose={() => setRefundOpen(false)} onDone={() => { setRefundOpen(false); load(); onChanged && onChanged(); }} />}
     </div>
   );
 }
@@ -309,7 +343,8 @@ export default function OrdersSection() {
   }
   function quickCancel(e, o) {
     e.stopPropagation();
-    if (window.confirm(`Cancel order #${o.id}? If it was paid, stock is restored.`)) act(() => api.adminCancelOrder(o.id));
+    if (o.payment_status === 'paid') return setSelected(o.id); // refunds need a reason (+ manager) — open the order
+    if (window.confirm(`Cancel unpaid order #${o.id}?`)) act(() => api.adminCancelOrder(o.id));
   }
   function quickReady(e, o) {
     e.stopPropagation();
@@ -428,7 +463,7 @@ export default function OrdersSection() {
                         {canDispatch && <button className="btn mini" onClick={(e) => quickDispatch(e, o)}>Dispatch</button>}
                         {canReady && <button className="btn mini" onClick={(e) => quickReady(e, o)}>Ready</button>}
                         {canCollected && <button className="btn mini" onClick={(e) => quickCollected(e, o)}>Collected</button>}
-                        {canCancel && <button className="btn mini cancel-btn" onClick={(e) => quickCancel(e, o)}>Cancel</button>}
+                        {canCancel && <button className="btn mini cancel-btn" onClick={(e) => quickCancel(e, o)}>{paid ? 'Refund…' : 'Cancel'}</button>}
                         <button className="btn mini secondary" onClick={(e) => { e.stopPropagation(); setSelected(o.id); }}>Open</button>
                       </div>
                     </td>

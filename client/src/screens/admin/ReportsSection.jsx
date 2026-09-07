@@ -180,6 +180,32 @@ export default function ReportsSection() {
             </div>
           )}
 
+          {data.refunds && (
+            <div className="dash-cols">
+              <div className="panel">
+                <h3 style={{ marginTop: 0 }}>Refunds by reason <span className="muted" style={{ fontSize: 13 }}>· {data.refunds.count} · {money(data.refunds.total)}</span></h3>
+                {data.refunds.by_reason.length === 0 ? <p className="muted">No refunds in range.</p> : (
+                  <table><tbody>
+                    {data.refunds.by_reason.map((r, i) => (
+                      <tr key={i}><td>{r.reason} <span className={`tag ${r.stock_action === 'restock' ? 'ok' : 'off'}`}>{r.stock_action === 'restock' ? 'restocked' : 'written off'}</span></td><td>{r.count}</td><td style={{ textAlign: 'right' }}>−{money(r.amount)}</td></tr>
+                    ))}
+                  </tbody></table>
+                )}
+                {data.voids?.count > 0 && <p className="muted" style={{ fontSize: 13 }}>Voids before payment: {data.voids.count} · {money(data.voids.total)}</p>}
+              </div>
+              <div className="panel">
+                <h3 style={{ marginTop: 0 }}>Wastage <span className="muted" style={{ fontSize: 13 }}>· {money(data.wastage?.value)}</span></h3>
+                {!data.wastage?.items?.length ? <p className="muted">Nothing written off in range.</p> : (
+                  <table><tbody>
+                    {data.wastage.items.map((w, i) => (
+                      <tr key={i}><td>{w.name}</td><td>{w.qty}</td><td style={{ textAlign: 'right' }}>{money(w.value)}</td></tr>
+                    ))}
+                  </tbody></table>
+                )}
+              </div>
+            </div>
+          )}
+
           <div className="panel">
             <h3 style={{ marginTop: 0 }}>Top products in range</h3>
             {data.top_products.length === 0 ? <p className="muted">No sales in range.</p> : (

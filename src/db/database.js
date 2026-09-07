@@ -336,6 +336,53 @@ async function initDB() {
     await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS discount_reason VARCHAR(80)`);
     await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS discount_approved_by VARCHAR(120)`);
 
+    // SIAMSHOP-REFUND-001 — refunds (full/partial, with reason + stock action) and voids before payment.
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS refunds (
+        id           SERIAL PRIMARY KEY,
+        shop_id      INTEGER NOT NULL REFERENCES shops(id) ON DELETE CASCADE,
+        order_id     INTEGER NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+        session_id   INTEGER REFERENCES till_sessions(id) ON DELETE SET NULL,
+        staff        VARCHAR(120),
+        approved_by  VARCHAR(120),
+        reason       VARCHAR(80) NOT NULL,
+        method       VARCHAR(20) NOT NULL,          -- cash | card | stripe
+        amount       NUMERIC(10,2) NOT NULL,
+        stock_action VARCHAR(10) NOT NULL,          -- restock | writeoff
+        stripe_refund_id VARCHAR(120),
+        note         TEXT,
+        created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS refund_items (
+        id             SERIAL PRIMARY KEY,
+        refund_id      INTEGER NOT NULL REFERENCES refunds(id) ON DELETE CASCADE,
+        order_item_id  INTEGER NOT NULL REFERENCES order_items(id) ON DELETE CASCADE,
+        qty            INTEGER NOT NULL,
+        amount         NUMERIC(10,2) NOT NULL
+      )
+    `);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_refunds_shop_at ON refunds(shop_id, created_at DESC)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_refunds_order ON refunds(order_id)`);
+    await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS refunded_amount NUMERIC(10,2) NOT NULL DEFAULT 0`);
+    await pool.query(`ALTER TABLE order_items ADD COLUMN IF NOT EXISTS refunded_qty INTEGER NOT NULL DEFAULT 0`);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS void_log (
+        id          SERIAL PRIMARY KEY,
+        shop_id     INTEGER NOT NULL REFERENCES shops(id) ON DELETE CASCADE,
+        session_id  INTEGER REFERENCES till_sessions(id) ON DELETE SET NULL,
+        staff       VARCHAR(120),
+        product_id  INTEGER REFERENCES products(id) ON DELETE SET NULL,
+        name        VARCHAR(300),
+        qty         INTEGER NOT NULL,
+        amount      NUMERIC(10,2) NOT NULL DEFAULT 0,
+        reason      VARCHAR(80) NOT NULL,
+        created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_void_log_shop_at ON void_log(shop_id, created_at DESC)`);
+
     // Helpful indexes for the hot paths.
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_products_shop ON products(shop_id, is_active)`);
     await pool.query(`CREATE INDEX IF NOT EXISTS idx_orders_shop ON orders(shop_id, created_at DESC)`);
