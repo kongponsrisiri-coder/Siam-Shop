@@ -17,6 +17,7 @@ const { app, BrowserWindow, Tray, Menu, nativeImage, shell, clipboard, ipcMain, 
 const path = require('path');
 const fs = require('fs');
 const printService = require('./printService');
+const { preparePrintPayload } = require('./printPayload');
 const printerScan = require('./printerScan');
 const raster = require('./raster');
 
@@ -237,9 +238,7 @@ function logoRaster(dataUrl, invert = false) {
 ipcMain.handle('siamshop:print-receipt', async (event, payload) => {
   try {
     const copies = Math.min(3, Math.max(1, parseInt(payload?.copies, 10) || 1));
-    const p = { ...(payload || {}) };
-    if (p.showLogo && p.logo) p.logoRaster = logoRaster(p.logo, !!p.logoInvert);
-    delete p.logo;
+    const p = preparePrintPayload(payload, logoRaster);
     for (let i = 0; i < copies; i++) await printService.printReceipt(printerCfg(p.dest), p);
     return { ok: true, copies };
   } catch (e) {
