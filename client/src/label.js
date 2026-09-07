@@ -1,7 +1,12 @@
-// Parcel label (SIAMSHOP-POST-001) — 4×6 in (100×150 mm) address + packing
-// label as a self-contained HTML document. Printed through the OS driver by the
-// desktop till (Electron silent print) or via the browser print dialog on the
-// web admin. Royal Mail sorts on the postcode, so it is the largest text.
+// Parcel label (SIAMSHOP-POST-001) — 4×6 in (100×150 mm) as a self-contained
+// HTML document. Printed through the OS driver by the desktop till (Electron
+// silent print) or via the browser print dialog on the web admin. Royal Mail
+// sorts on the postcode, so it is the largest text.
+//
+// Two faces (Krit, PR #2 review): the SHIPPING label shows only what a courier
+// needs — address, phone, order #, item COUNT, delivery note — never product
+// names (privacy + theft advert). The PACKING COPY (goes inside the box) lists
+// the items. The QR carries the order number only, never the customer's email.
 import QRCode from 'qrcode';
 
 const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -55,10 +60,12 @@ export async function buildLabelHtml(d, { packingCopy = false } = {}) {
   </div>
   <div class="mid">
     <div class="items">
-      <div class="h">${items.reduce((n, i) => n + Number(i.qty || 0), 0)} item(s)</div>
-      ${shown.map((i) => `<div class="row"><span class="q">${esc(i.qty)}×</span><span>${esc(i.name)}${i.options?.length ? `<div class="opt">${esc(i.options.join(', '))}</div>` : ''}</span></div>`).join('')}
-      ${more > 0 ? `<div class="row"><span class="q"></span><span>+${more} more</span></div>` : ''}
-      ${d.notes ? `<div class="opt" style="margin-top:0.05in">Note: ${esc(d.notes)}</div>` : ''}
+      <div class="h">${items.reduce((n, i) => n + Number(i.qty || 0), 0)} item(s) · 1 parcel</div>
+      ${packingCopy
+        ? shown.map((i) => `<div class="row"><span class="q">${esc(i.qty)}×</span><span>${esc(i.name)}${i.options?.length ? `<div class="opt">${esc(i.options.join(', '))}</div>` : ''}</span></div>`).join('')
+          + (more > 0 ? `<div class="row"><span class="q"></span><span>+${more} more</span></div>` : '')
+        : `<div class="opt">Contents listed on the packing copy inside.</div>`}
+      ${d.notes ? `<div class="opt" style="margin-top:0.05in">Delivery note: ${esc(d.notes)}</div>` : ''}
     </div>
     <div class="qrbox">${qr}<div>Scan to track</div></div>
   </div>
@@ -82,9 +89,9 @@ export const SAMPLE_LABEL = {
     { name: 'Oishi Green Tea Original 500ml', qty: 6, options: [] },
   ],
   staff: 'Nok',
-  tracking_url: 'https://siam-shop-production.up.railway.app/order/status?order=1234',
+  tracking_url: 'https://siam-shop-production.up.railway.app/order/status?order=1234', // order # only — never the email
   shop: { name: 'Cha & Pinto Box', return_address: '16 London Rd, Guildford GU1 2AF' },
-  notes: '',
+  notes: 'Leave with neighbour if out',
 };
 
 // Web fallback: open the label in a window and print it (browser dialog).

@@ -29,9 +29,13 @@ const pcSize = Number(/\.postcode \{[^}]*font-size:\s*([\d.]+)pt/.exec(html)[1])
 check('postcode is the largest type on the label', pcSize === Math.max(...sizes), { pcSize, max: Math.max(...sizes) });
 check('@page is 4in × 6in, no margin', /@page \{ size: 4in 6in; margin: 0; \}/.test(html));
 check('QR rendered as inline SVG for the tracking URL', /<svg[^>]*viewBox/.test(html) && html.includes('Scan to track'));
-check('items listed with qty × name, 6× Oishi present', /6×<\/span><span>Oishi Green Tea/.test(html));
+check('SHIPPING face shows item count only — no product names', /5 item\(s\)|10 item\(s\)/.test(html) && !/Oishi Green Tea|Jasmine Rice/.test(html));
+const packing = await buildLabelHtml(SAMPLE_LABEL, { packingCopy: true });
+check('PACKING COPY lists items (6× Oishi)', /6×<\/span><span>Oishi Green Tea/.test(packing) && /PACKING COPY/.test(packing));
+check('delivery note stays on the shipping face', /Delivery note: Leave with neighbour/.test(html));
+check('no email anywhere in the label (QR/tracking)', !/[\w.+-]+@[\w-]+\.\w+/.test(html) && !/[\w.+-]+@[\w-]+\.\w+/.test(packing));
 check('return address + packed-by in the footer', /Return to: 16 London Rd/.test(html) && /Packed by Nok/.test(html));
-const many = await buildLabelHtml({ ...SAMPLE_LABEL, items: Array.from({ length: 12 }, (_, i) => ({ name: `Item ${i + 1}`, qty: 1, options: [] })) });
+const many = await buildLabelHtml({ ...SAMPLE_LABEL, items: Array.from({ length: 12 }, (_, i) => ({ name: `Item ${i + 1}`, qty: 1, options: [] })) }, { packingCopy: true });
 check('item list truncates at 8 with "+N more"', (many.match(/class="row"/g) || []).length === 9 && /\+4 more/.test(many));
 const escaped = await buildLabelHtml({ ...SAMPLE_LABEL, ship_to: { ...SAMPLE_LABEL.ship_to, name: '<b>x</b> & co' } });
 check('customer text is HTML-escaped', escaped.includes('&lt;b&gt;x&lt;/b&gt; &amp; co'));
@@ -62,6 +66,7 @@ const L = r.data || {};
 check('postcode split out of the address', L.ship_to?.postcode === 'GU1 3AA' && !L.ship_to.lines.join(' ').includes('GU1 3AA'), L.ship_to);
 check('address lines kept', L.ship_to?.lines?.[0] === 'Flat 2' && L.ship_to.lines.includes('Guildford'), L.ship_to?.lines);
 check('items, staff, shop, tracking url, notes present', L.items?.[0]?.qty === 2 && L.staff === 'Label Cashier' && /Guildford/.test(L.shop?.return_address) && /order\/status\?order=/.test(L.tracking_url) && L.notes === 'Leave with neighbour', L);
+check('tracking URL carries the order # only — no email', /order=\d+$/.test(L.tracking_url || '') && !/@|email=/.test(L.tracking_url || ''), L.tracking_url);
 check('label_printed_at null before printing', L.label_printed_at == null);
 r = await req('GET', `/api/admin/orders/${oid}/label`, null, prepTok);
 check('prep role cannot fetch labels → 403', r.status === 403, r.data);
@@ -97,6 +102,7 @@ if (process.argv.includes('--pdf')) {
   const htmlPath = path.join(outDir, 'SIAMSHOP-POST-001-sample-label.html');
   const pdfPath = path.join(outDir, 'SIAMSHOP-POST-001-sample-label.pdf');
   fs.writeFileSync(htmlPath, html);
+  fs.writeFileSync(path.join(outDir, 'SIAMSHOP-POST-001-sample-packing-copy.html'), packing);
   const electronDir = path.join(here, '..', 'electron');
   const r2 = spawnSync('npx', ['electron', '.'], { cwd: electronDir, env: { ...process.env, SIAMSHOP_LABEL_HTML: htmlPath, SIAMSHOP_LABEL_PDF: pdfPath }, encoding: 'utf8', timeout: 60000 });
   const out = (r2.stdout || '') + (r2.stderr || '');
@@ -108,6 +114,9 @@ if (process.argv.includes('--pdf')) {
     check('single page', (pdf.match(/\/Type\s*\/Page[^s]/g) || []).length === 1, (pdf.match(/\/Type\s*\/Page[^s]/g) || []).length);
     console.log('  →', path.relative(process.cwd(), pdfPath));
   }
+  const packPdf = path.join(outDir, 'SIAMSHOP-POST-001-sample-packing-copy.pdf');
+  const r3 = spawnSync('npx', ['electron', '.'], { cwd: electronDir, env: { ...process.env, SIAMSHOP_LABEL_HTML: path.join(outDir, 'SIAMSHOP-POST-001-sample-packing-copy.html'), SIAMSHOP_LABEL_PDF: packPdf }, encoding: 'utf8', timeout: 60000 });
+  check('packing copy PDF written', fs.existsSync(packPdf) && fs.statSync(packPdf).size > 5000, (r3.stdout || '').split('\n').filter((l) => /label-rig/.test(l)).join(' | '));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

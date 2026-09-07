@@ -2259,7 +2259,8 @@ app.get('/api/admin/orders/:id/label', requireAuth, async (req, res) => {
       ship_to: { name: o.customer_name || '', lines, postcode, phone: o.customer_phone || '' },
       items: items.map((it) => ({ name: it.name_snapshot, qty: it.qty, options: (it.options_snapshot || []).map((x) => x.name) })),
       staff: req.auth?.name || 'Owner',
-      tracking_url: orderStatusUrl(originFromReq(req), o.id, o.customer_email),
+      // No email in the QR — the outside of a parcel is public; the tracking page asks for it.
+      tracking_url: orderStatusUrl(originFromReq(req), o.id, null),
       shop: { name: o.shop_name, return_address: settings.return_address || '' },
       label_printed_at: o.label_printed_at,
       notes: o.notes || '',
