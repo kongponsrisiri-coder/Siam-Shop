@@ -1728,6 +1728,47 @@ app.get('/api/products/lookup', requireAuth, async (req, res) => {
   }
 });
 
+// Resolve a product from whatever a marketing site happens to know about it —
+// its id, its barcode, or just its name (SIAMSHOP-DEEPLINK-001). Their "Add to
+// basket" buttons all pointed at the bare shop page, so a customer arrived at
+// the full catalogue with an empty basket and had to find the item again
+// (Korakot, 8 Sep). Imported catalogues carry no barcodes, so the name match is
+// what actually gets used; it is deliberately forgiving about case, spacing and
+// punctuation, and refuses when a name is ambiguous rather than guessing.
+app.get('/api/products/resolve', lookupLimiter, async (req, res) => {
+  try {
+    const shopId = await resolveShopId(req);
+    if (!shopId) return res.status(404).json({ error: 'Shop not found' });
+    const ref = String(req.query.ref || '').trim();
+    if (!ref) return res.status(400).json({ error: 'Missing ref' });
+    const base = `SELECT p.id, p.name, p.name_th, p.description, p.description_th, p.price, p.stock_qty,
+                         p.track_stock, p.kind, p.image_url, p.category_id, c.name AS category, c.name_th AS category_th
+                    FROM products p LEFT JOIN categories c ON c.id = p.category_id
+                   WHERE p.shop_id = $1 AND p.is_active = TRUE`;
+    let rows = [];
+    // Only treat it as an id if it could BE one: a 13-digit barcode is all
+    // digits too, and comparing it to an integer column errors out.
+    const asId = /^\d+$/.test(ref) && Number(ref) <= 2147483647 ? Number(ref) : null;
+    if (asId) ({ rows } = await pool.query(`${base} AND p.id = $2`, [shopId, asId]));
+    if (!rows.length) ({ rows } = await pool.query(`${base} AND p.barcode = $2`, [shopId, ref]));
+    if (!rows.length) {
+      // Squash to letters and digits on both sides, so "Chatramue Thai Tea Mix
+      // 400g" finds "CHATRAMUE THAI TEA MIX 400G" and a slug finds either.
+      ({ rows } = await pool.query(
+        `${base} AND regexp_replace(lower(p.name), '[^a-z0-9]', '', 'g') = regexp_replace(lower($2), '[^a-z0-9]', '', 'g')`,
+        [shopId, ref]
+      ));
+    }
+    if (!rows.length) return res.status(404).json({ error: 'Product not found' });
+    if (rows.length > 1) return res.status(409).json({ error: 'That name matches more than one product', matches: rows.map((r) => ({ id: r.id, name: r.name })) });
+    annotateAvailability(rows, await shopContext(shopId));
+    res.json((await attachOptionGroups(rows))[0]);
+  } catch (err) {
+    console.error('[product resolve]', err.message);
+    res.status(500).json({ error: 'Failed to find that product' });
+  }
+});
+
 app.get('/api/products/:id', async (req, res) => {
   try {
     const shopId = await resolveShopId(req);

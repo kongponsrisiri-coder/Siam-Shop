@@ -62,6 +62,8 @@ const ROUTES = [
   { hash: '#/', authed: false, expect: /Enter your PIN|Till sign in/ },
   { hash: '#/till', authed: false, expect: /Enter your PIN/ },
   { hash: '#/shop', authed: false },
+  // A marketing site's deep link: resolves, adds, and lands on the basket.
+  { hash: '#/p/Test%20Product?add=1', authed: false, expect: /added to your basket|Cart|basket/i },
   // cashpad-keys: the cash tender pad must draw on the till, not just compile.
   { hash: '#/till', authed: true, expect: /(Scan barcode|till-scan)[\s\S]*cashpad-keys/, forbid: /Enter your PIN/ },
   { hash: '#/prep', authed: true, forbid: /Enter your PIN/ },
@@ -78,6 +80,7 @@ const FAKE_API = {
   '/api/admin/settings': { minimum_order_amount: '0', receipt_header: '', receipt_footer: '', vat_number: '', receipt_copies: '1' },
   '/api/admin/shop': { id: 1, name: 'Smoke Shop', slug: 'demo' },
   '/api/admin/chats': { sessions: [] },
+  '/api/products/resolve': { id: 7, name: 'Test Product', price: 2.5, stock_qty: 5, track_stock: true, option_groups: [], available_now: true },
   '/api/shop': { id: 1, name: 'Smoke Shop', slug: 'demo' },
   '/api/till/session': { session: null, summary: null },
   '/api/admin/report': { range: {}, totals: { gross: 0, count: 0 }, by_channel: [], by_payment: [], by_day: [], top_products: [], discounts: { total: 0, by_reason: [], by_staff: [] }, refunds: { count: 0, total: 0, by_reason: [] }, voids: { count: 0, total: 0 }, wastage: { value: 0, items: [] } },
