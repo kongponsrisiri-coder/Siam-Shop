@@ -631,3 +631,32 @@ th { color: var(--muted); font-weight: 600; }
 .chat-msg.assistant { background: #fff; border: 1px dashed var(--line); align-self: flex-start; }
 .chat-msg.staff { background: var(--action); color: var(--action-ink); align-self: flex-end; }
 .chat-who { font-size: 11px; font-weight: 700; opacity: .65; margin-bottom: 2px; }
+
+/* The basket on a phone (SIAMSHOP-MOBILE-CART).
+   The generic `.panel table` rule scrolls admin tables sideways, which on the
+   customer's basket cut the product name in half and hid Remove off-screen
+   (Korakot, 8 Sep). The basket is not a data table on a phone — each line
+   becomes a block that fits the screen. */
+@media (max-width: 640px) {
+  /* width:100% on the rows is meaningless while the table itself is still as
+     wide as its original columns — the page then scrolls sideways and the
+     header is cut off too. Pin the table to the panel first. */
+  .panel table.cart-table { display: block; width: 100%; max-width: 100%; overflow-x: visible; white-space: normal; }
+  .cart-table * { min-width: 0; box-sizing: border-box; }
+  .cart-table thead { display: none; }
+  .cart-table tbody, .cart-table tr, .cart-table td { display: block; width: 100%; }
+  .cart-table tr {
+    border: 1px solid var(--line); border-radius: 10px;
+    padding: 10px 12px; margin-bottom: 10px; background: #fff;
+  }
+  .cart-table td { border: none; padding: 3px 0; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .cart-table td::before {
+    content: attr(data-label); color: var(--muted); font-size: 13px; flex: 0 0 auto;
+  }
+  /* The name owns its row; the label would only repeat the obvious. */
+  .cart-table td.cart-name { display: block; font-weight: 700; padding-bottom: 6px; }
+  .cart-table td.cart-name::before { content: none; }
+  .cart-table td.cart-remove { justify-content: flex-end; padding-top: 6px; }
+  .cart-table td.cart-remove::before { content: none; }
+  .cart-table td input[type="number"] { width: 90px !important; }
+}

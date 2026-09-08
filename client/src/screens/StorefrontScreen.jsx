@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import { api } from '../api.js';
 import { useCart } from '../cart.jsx';
 import { useLang, useT, pickName } from '../lang.jsx';
@@ -59,6 +59,12 @@ function QtyStepper({ product }) {
   const { lang } = useLang();
   const { items, add, setQty } = useCart();
   const [picking, setPicking] = useState(false);
+  const navigate = useNavigate();
+  // Adding takes the shopper to the basket, the same as tapping a product on
+  // the shop's own website does (Korakot, 8 Sep). The +/− stepper below does
+  // NOT: adjusting something already in the basket should leave you where you
+  // are. "Keep shopping" on the basket is the way back.
+  const toBasket = () => navigate('/cart', { state: { added: product.name, qty: 1 } });
 
   // Products with size / toppings: every add goes through the picker, and the
   // card shows how many builds of it are already in the cart.
@@ -74,7 +80,7 @@ function QtyStepper({ product }) {
             product={product}
             lang={lang}
             onClose={() => setPicking(false)}
-            onConfirm={(ids) => { add(product, 1, ids); setPicking(false); }}
+            onConfirm={(ids) => { add(product, 1, ids); setPicking(false); toBasket(); }}
           />
         )}
       </>
@@ -87,7 +93,7 @@ function QtyStepper({ product }) {
 
   if (qty <= 0) {
     return (
-      <button className="btn add-btn" onClick={() => add(product, 1)}>
+      <button className="btn add-btn" onClick={() => { add(product, 1); toBasket(); }}>
         {t('addToCart')}
       </button>
     );

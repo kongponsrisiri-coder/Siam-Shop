@@ -110,7 +110,7 @@ export default function CartScreen() {
       {addedNotice}
       {choiceNotice}
       <div className="panel">
-        <table>
+        <table className="cart-table">
           <thead>
             <tr>
               <th>Product</th>
@@ -123,12 +123,12 @@ export default function CartScreen() {
           <tbody>
             {items.map((i) => (
               <tr key={i.key}>
-                <td>
+                <td data-label="Product" className="cart-name">
                   {lang === 'th' && i.name_th ? i.name_th : i.name}
                   {i.options?.length > 0 && <div className="line-opts">{optionsLabel(i.options, lang)}</div>}
                 </td>
-                <td>£{i.price.toFixed(2)}</td>
-                <td>
+                <td data-label="Price">£{i.price.toFixed(2)}</td>
+                <td data-label="Qty">
                   <input
                     type="number"
                     min="1"
@@ -137,8 +137,8 @@ export default function CartScreen() {
                     style={{ width: 70 }}
                   />
                 </td>
-                <td>£{(i.price * i.qty).toFixed(2)}</td>
-                <td>
+                <td data-label="Total">£{(i.price * i.qty).toFixed(2)}</td>
+                <td className="cart-remove">
                   <button className="btn ghost" onClick={() => remove(i.key)}>Remove</button>
                 </td>
               </tr>
