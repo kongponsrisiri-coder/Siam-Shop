@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { useCart } from '../cart.jsx';
 import { useLang, useT } from '../lang.jsx';
 import { api } from '../api.js';
@@ -65,6 +65,15 @@ export default function CartScreen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Confirm what a deep link just put in the basket, so arriving here is not a
+  // surprise (SIAMSHOP-DEEPLINK-001).
+  const justAdded = useLocation().state && useLocation().state.added;
+  const addedNotice = justAdded ? (
+    <div className="restock-banner" style={{ marginBottom: 12 }}>
+      ✓ <strong>{justAdded}</strong> added to your basket.
+    </div>
+  ) : null;
+
   const choiceNotice = needChoice.length > 0 && (
     <div className="min-warn" style={{ marginBottom: 12 }}>
       {t('chooseOptionsFor')}:{' '}
@@ -80,6 +89,7 @@ export default function CartScreen() {
   if (items.length === 0) {
     return (
       <div className="container center">
+        {addedNotice}
         {choiceNotice}
         <p className="muted">Your cart is empty.</p>
         <Link className="btn" to="/">{t('keepShopping')}</Link>
@@ -97,6 +107,7 @@ export default function CartScreen() {
   return (
     <div className="container">
       <h1>{t('cart')}</h1>
+      {addedNotice}
       {choiceNotice}
       <div className="panel">
         <table>

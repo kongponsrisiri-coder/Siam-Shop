@@ -14,6 +14,7 @@ import TillScreen from './screens/TillScreen.jsx';
 import ScannerScreen from './screens/ScannerScreen.jsx';
 import OrderStatusScreen from './screens/OrderStatusScreen.jsx';
 import AccountScreen from './screens/AccountScreen.jsx';
+import AddToBasketScreen from './screens/AddToBasketScreen.jsx';
 import PrepScreen from './screens/PrepScreen.jsx';
 import { isElectron } from './electron.js';
 import { api } from './api.js';
@@ -84,6 +85,8 @@ export default function App() {
             <Routes>
               <Route path="/" element={isElectron ? <Navigate to="/till" replace /> : <StorefrontScreen />} />
               <Route path="/product/:id" element={<ProductScreen />} />
+              {/* Deep link from a marketing site: adds the item and lands on the basket. */}
+              <Route path="/p/:ref" element={<AddToBasketScreen />} />
               <Route path="/cart" element={<CartScreen />} />
               <Route path="/checkout" element={<CheckoutScreen />} />
               <Route path="/order/success" element={<CheckoutScreen success />} />

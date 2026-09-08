@@ -78,6 +78,9 @@ export const api = {
   // Health / shop
   health: () => request('/api/health'),
   getShop: () => request('/api/shop'),
+  // Find a product from an id, a barcode or its name — for /p/<ref> deep links
+  // off a marketing site (SIAMSHOP-DEEPLINK-001).
+  resolveProduct: (ref) => request(`/api/products/resolve?ref=${encodeURIComponent(ref)}`),
 
   // Public storefront
   listProducts: (params = {}) => {
