@@ -215,46 +215,52 @@ const FULFIL = { dine_in: 'EAT IN', takeaway: 'TAKE AWAY', collection: 'COLLECTI
 function receiptLines(r) {
   const when = r.createdAt ? new Date(r.createdAt) : new Date();
   const dateStr = when.toLocaleString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', timeZone: 'Europe/London' });
+  // Type sizes match the restaurant till's customer bill, which is the size a
+  // customer can actually read at arm's length; ours was roughly a third
+  // smaller across the board and the item lines were not bold, so a receipt was
+  // hard work (Korakot, 8 Sep, holding both bills side by side). A long shop
+  // name steps down a size rather than wrapping.
   const L = [];
-  L.push({ text: String(r.shopName || 'SiamShop'), size: 30, bold: true, center: true, gap: 4 });
-  if (r.header) String(r.header).split(/\r?\n/).filter(Boolean).forEach((h) => L.push({ text: h, size: 16, center: true }));
+  const name = String(r.shopName || 'SiamShop');
+  L.push({ text: name, size: name.length <= 16 ? 42 : 32, bold: true, center: true, gap: 6 });
+  if (r.header) String(r.header).split(/\r?\n/).filter(Boolean).forEach((h) => L.push({ text: h, size: 21, center: true, gap: 2 }));
   L.push({ blank: true, size: 10 });
-  L.push({ text: `Receipt #${r.orderId}`, right: dateStr, size: 17 });
-  if (r.staff) L.push({ text: 'Served by', right: String(r.staff), size: 17 });
-  if (r.fulfilment && FULFIL[r.fulfilment]) L.push({ text: FULFIL[r.fulfilment], size: 20, bold: true });
+  L.push({ text: `Receipt #${r.orderId}`, right: dateStr, size: 23, gap: 2 });
+  if (r.staff) L.push({ text: 'Served by', right: String(r.staff), size: 23, gap: 2 });
+  if (r.fulfilment && FULFIL[r.fulfilment]) L.push({ text: FULFIL[r.fulfilment], size: 32, bold: true, center: true, gap: 4 });
   L.push({ rule: true });
 
   for (const it of r.items || []) {
     const gross = it.discount && Number(it.discount.amount) > 0 && it.gross != null ? it.gross : it.line_total;
-    L.push({ text: `${it.qty}x  ${it.name}`, right: money(gross), size: 20 });
+    L.push({ text: `${it.qty}x  ${it.name}`, right: money(gross), size: 27, bold: true, gap: 4 });
     const opts = (it.options || []).map((o) => (typeof o === 'string' ? o : o && o.name)).filter(Boolean);
-    if (opts.length) L.push({ text: opts.join(', '), size: 16, indent: 26 });
-    if (it.qty > 1) L.push({ text: `@ ${money(it.unit_price)} each`, size: 15, indent: 26 });
+    if (opts.length) L.push({ text: opts.join(', '), size: 21, indent: 30, gap: 2 });
+    if (it.qty > 1) L.push({ text: `@ ${money(it.unit_price)} each`, size: 20, indent: 30, gap: 2 });
     if (it.discount && Number(it.discount.amount) > 0) {
-      L.push({ text: `Discount - ${it.discount.reason || ''}`.trim(), right: '-' + money(it.discount.amount), size: 16, indent: 26 });
+      L.push({ text: `Discount - ${it.discount.reason || ''}`.trim(), right: '-' + money(it.discount.amount), size: 21, indent: 30, gap: 2 });
     }
   }
   L.push({ rule: true });
 
   const basketDisc = r.discount && Number(r.discount.amount) > 0 ? r.discount : null;
   if (Number(r.delivery_fee) > 0) {
-    L.push({ text: 'Subtotal', right: money(r.subtotal), size: 18 });
-    L.push({ text: 'Delivery', right: money(r.delivery_fee), size: 18 });
+    L.push({ text: 'Subtotal', right: money(r.subtotal), size: 24, gap: 2 });
+    L.push({ text: 'Delivery', right: money(r.delivery_fee), size: 24, gap: 2 });
   }
   if (basketDisc) {
-    L.push({ text: 'Subtotal', right: money(r.subtotal), size: 18 });
-    L.push({ text: `Discount - ${basketDisc.reason || ''}`.trim(), right: '-' + money(basketDisc.amount), size: 18 });
+    L.push({ text: 'Subtotal', right: money(r.subtotal), size: 24, gap: 2 });
+    L.push({ text: `Discount - ${basketDisc.reason || ''}`.trim(), right: '-' + money(basketDisc.amount), size: 24, gap: 2 });
   }
   L.push({ rule: true, heavy: true });
-  L.push({ text: 'TOTAL', right: money(r.total), size: 28, bold: true, gap: 4 });
+  L.push({ text: 'TOTAL', right: money(r.total), size: 38, bold: true, gap: 4 });
   if (basketDisc || Number(r.discount_amount) > 0) {
-    L.push({ text: `You saved ${money(r.discount_amount || (basketDisc && basketDisc.amount))}`, size: 17, center: true });
+    L.push({ text: `You saved ${money(r.discount_amount || (basketDisc && basketDisc.amount))}`, size: 23, center: true, gap: 2 });
   }
-  L.push({ text: `Paid by ${String(r.payment_method || 'cash').toUpperCase()}`, right: r.amount_tendered != null ? money(r.amount_tendered) : '', size: 18 });
-  if (r.change_given != null) L.push({ text: 'Change', right: money(r.change_given), size: 18 });
+  L.push({ text: `Paid by ${String(r.payment_method || 'cash').toUpperCase()}`, right: r.amount_tendered != null ? money(r.amount_tendered) : '', size: 24, gap: 2 });
+  if (r.change_given != null) L.push({ text: 'Change', right: money(r.change_given), size: 24, gap: 2 });
   L.push({ rule: true });
-  L.push({ text: String(r.footer || 'Thank you for shopping with us!'), size: 17, center: true });
-  if (r.vatNote) L.push({ text: String(r.vatNote), size: 15, center: true });
+  L.push({ text: String(r.footer || 'Thank you for shopping with us!'), size: 22, center: true });
+  if (r.vatNote) L.push({ text: String(r.vatNote), size: 21, center: true });
   return L;
 }
 
