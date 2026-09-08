@@ -11,6 +11,8 @@
 //   … --shop demo      which shop (default: chapinto)
 //
 // Idempotent: decoded text contains no entities, so a second run finds nothing.
+import { login } from './lib/adminAuth.mjs';
+
 const BASE = (process.env.BASE || 'http://localhost:4999').replace(/\/$/, '');
 const PASSWORD = process.env.ADMIN_PASSWORD || '';
 const args = process.argv.slice(2);
@@ -39,8 +41,10 @@ async function api(method, p, body) {
 }
 
 async function main() {
-  if (!PASSWORD) { console.error('ADMIN_PASSWORD is required.'); process.exit(1); }
-  ({ token } = await api('POST', '/api/admin/login', { password: PASSWORD }));
+  if (!PASSWORD && !process.env.STAFF_PIN) { console.error('Set STAFF_PIN (a manager PIN) or ADMIN_PASSWORD.'); process.exit(1); }
+  const auth = await login(BASE, SHOP);
+  token = auth.token;
+  console.log(`  signed in with the ${auth.as}`);
   const products = await api('GET', '/api/admin/products');
   const bad = products.filter((p) => HAS_ENTITY.test(p.name || '') || HAS_ENTITY.test(p.description || ''));
   console.log(`— ${SHOP}: ${products.length} products, ${bad.length} carrying a raw HTML entity`);

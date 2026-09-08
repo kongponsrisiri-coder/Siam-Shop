@@ -14,6 +14,8 @@
 // start at 10 like the rest of the imported catalogue. Idempotent: a product
 // with the same name is left alone.
 const MENUS = 'https://www.chapintobox.co.uk/menus';
+import { login } from './lib/adminAuth.mjs';
+
 const BASE = (process.env.BASE || 'http://localhost:4999').replace(/\/$/, '');
 const PASSWORD = process.env.ADMIN_PASSWORD || '';
 const args = process.argv.slice(2);
@@ -71,7 +73,7 @@ async function photo(id) {
 }
 
 async function main() {
-  if (!PASSWORD) { console.error('ADMIN_PASSWORD is required.'); process.exit(1); }
+  if (!PASSWORD && !process.env.STAFF_PIN) { console.error('Set STAFF_PIN (a manager PIN) or ADMIN_PASSWORD.'); process.exit(1); }
   const menu = await menuItems();
   const wanted = DRINKS.map((n) => {
     const hit = menu.find((m) => norm(m.name) === norm(n));
@@ -80,7 +82,9 @@ async function main() {
   const gone = wanted.filter((d) => d.notOnMenu || d.price == null);
   if (gone.length) console.log(`  ! not found on the menu any more: ${gone.map((g) => g.name).join(', ')}`);
 
-  ({ token } = await api('POST', '/api/admin/login', { password: PASSWORD }));
+  const auth = await login(BASE, SHOP);
+  token = auth.token;
+  console.log(`  signed in with the ${auth.as}`);
   const cats = await api('GET', '/api/categories');
   const cat = (Array.isArray(cats) ? cats : cats.categories || []).find((c) => c.name === CATEGORY);
   if (!cat) throw new Error(`No "${CATEGORY}" category on ${SHOP} — create it first`);

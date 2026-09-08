@@ -14,6 +14,8 @@
 //
 // Idempotent: without --force it skips any product that already has a photo.
 const MENUS = 'https://www.chapintobox.co.uk/menus';
+import { login } from './lib/adminAuth.mjs';
+
 const BASE = (process.env.BASE || 'http://localhost:4999').replace(/\/$/, '');
 const PASSWORD = process.env.ADMIN_PASSWORD || '';
 const args = process.argv.slice(2);
@@ -73,11 +75,13 @@ async function fetchPhoto(id) {
 }
 
 async function main() {
-  if (!PASSWORD) { console.error('ADMIN_PASSWORD is required.'); process.exit(1); }
+  if (!PASSWORD && !process.env.STAFF_PIN) { console.error('Set STAFF_PIN (a manager PIN) or ADMIN_PASSWORD.'); process.exit(1); }
   const photos = await menuPhotos();
   console.log(`— ${photos.size} menu items with a photo on ${MENUS}`);
 
-  ({ token } = await api('POST', '/api/admin/login', { password: PASSWORD }));
+  const auth = await login(BASE, SHOP);
+  token = auth.token;
+  console.log(`  signed in with the ${auth.as}`);
   const products = await api('GET', '/api/admin/products');
   const food = products.filter((p) => p.kind === 'food');
   console.log(`— ${food.length} counter items on "${SHOP}" (${food.filter((p) => p.image_url).length} already have a photo)\n`);
