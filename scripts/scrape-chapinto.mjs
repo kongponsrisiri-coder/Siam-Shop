@@ -22,6 +22,18 @@
 import { mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import path from 'node:path';
 
+// The JSON-LD carries HTML-escaped text, so "S&B" arrives as "S&amp;B" and went
+// straight into the catalogue that way — shoppers saw it on the shelf and on
+// their receipt (surfaced by a broken deep link, Korakot 8 Sep). Decode once,
+// here, rather than in every consumer.
+const ENTITIES = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ' };
+export function decodeEntities(v) {
+  return String(v == null ? '' : v)
+    .replace(/&(amp|lt|gt|quot|apos|nbsp);/g, (_, n) => ENTITIES[n])
+    .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(Number(n)))
+    .replace(/&#x([0-9a-f]+);/gi, (_, n) => String.fromCharCode(parseInt(n, 16)));
+}
+
 const SITE = 'https://www.chapintobox.co.uk';
 const UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36';
 const DELAY_MS = 350;
@@ -73,7 +85,7 @@ function productsFromListing(html) {
       const it = el?.item;
       if (!it || it['@type'] !== 'Product' || !it.name) continue;
       out.push({
-        name: String(it.name).trim(),
+        name: decodeEntities(it.name).trim(),
         url: it.url || '',
         image: typeof it.image === 'string' ? it.image : it.image?.contentUrl || '',
         price: Number(it.offers?.price ?? it.offers?.[0]?.price ?? 0),
@@ -118,12 +130,12 @@ function productFromPage(html, url) {
     const img = Array.isArray(d.image) ? d.image[0] : d.image;
     const offer = Array.isArray(d.offers) ? d.offers[0] : d.offers;
     return {
-      name: String(d.name).trim(),
+      name: decodeEntities(d.name).trim(),
       url,
       image: (typeof img === 'string' ? img : img?.contentUrl) || '',
       price: Number(offer?.price || 0),
       inStock: !/OutOfStock/i.test(String(offer?.availability || '')),
-      description: String(d.description || '').trim(),
+      description: decodeEntities(d.description || '').trim(),
       sku: String(d.sku || '').trim(),
     };
   }
