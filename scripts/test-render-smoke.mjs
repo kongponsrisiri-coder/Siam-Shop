@@ -66,7 +66,7 @@ const ROUTES = [
   { hash: '#/till', authed: true, expect: /(Scan barcode|till-scan)[\s\S]*cashpad-keys/, forbid: /Enter your PIN/ },
   { hash: '#/prep', authed: true, forbid: /Enter your PIN/ },
   { hash: '#/scan', authed: true },
-  ...['dashboard', 'reports', 'products', 'categories', 'orders', 'customers', 'campaigns', 'staff', 'settings', 'device'].map((t) => ({ hash: `#/admin?tab=${t}`, authed: true, forbid: /Enter your PIN|Manager or owner only/ })),
+  ...['dashboard', 'reports', 'products', 'categories', 'orders', 'customers', 'campaigns', 'chats', 'staff', 'settings', 'device'].map((t) => ({ hash: `#/admin?tab=${t}`, authed: true, forbid: /Enter your PIN|Manager or owner only/ })),
 ];
 // Minimal JSON the screens need to draw with an empty shop. Anything not
 // listed gets [] — a screen that crashes on empty data is a real bug.
@@ -77,6 +77,7 @@ const FAKE_API = {
   '/api/settings': { minimum_order_amount: 0, currency: 'GBP', discount_reasons: ['Staff'], receipt_copies: 1, opening_hours: null, open_now: true, collection_enabled: false, brand_primary: '', brand_accent: '', brand_logo: '', receipt_show_logo: false },
   '/api/admin/settings': { minimum_order_amount: '0', receipt_header: '', receipt_footer: '', vat_number: '', receipt_copies: '1' },
   '/api/admin/shop': { id: 1, name: 'Smoke Shop', slug: 'demo' },
+  '/api/admin/chats': { sessions: [] },
   '/api/shop': { id: 1, name: 'Smoke Shop', slug: 'demo' },
   '/api/till/session': { session: null, summary: null },
   '/api/admin/report': { range: {}, totals: { gross: 0, count: 0 }, by_channel: [], by_payment: [], by_day: [], top_products: [], discounts: { total: 0, by_reason: [], by_staff: [] }, refunds: { count: 0, total: 0, by_reason: [] }, voids: { count: 0, total: 0 }, wastage: { value: 0, items: [] } },

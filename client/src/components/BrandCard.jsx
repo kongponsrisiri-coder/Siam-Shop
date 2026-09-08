@@ -70,7 +70,7 @@ export default function BrandCard({ settings, onSaved }) {
         <div style={{ flex: '1 1 260px' }}>
           <label>Logo</label>
           <div className="brand-logo-dark" style={{ background: preview.primary }}>
-            {logo ? <img className="brand-logo-preview" src={logo} alt="Shop logo preview" /> : <span className="row" style={{ gap: 8, alignItems: 'center', color: '#fff', fontFamily: 'var(--serif)', fontWeight: 700 }}><LotusBadge size={28} center={preview.primary} /> Siam<span style={{ color: preview.accent }}>Shop</span></span>}
+            {logo ? <img className="brand-logo-preview" src={logo} alt="Shop logo preview" /> : <span className="row" style={{ gap: 8, alignItems: 'center', color: 'var(--on-primary)', fontFamily: 'var(--serif)', fontWeight: 700 }}><LotusBadge size={28} center={preview.primary} /> Siam<span style={{ color: preview.accent }}>Shop</span></span>}
           </div>
           <div className="row" style={{ gap: 8, marginTop: 8, flexWrap: 'wrap' }}>
             <label className="btn secondary" style={{ cursor: 'pointer', margin: 0 }}>
