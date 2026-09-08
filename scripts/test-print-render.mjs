@@ -128,6 +128,23 @@ console.log('— size, logo, and the classic fallback');
   check('both paths show the same change', lines.find((l) => l.text === 'Change').right === '£7.40' && /7\.40/.test(text));
 }
 
+console.log('— big enough to read at arm\'s length');
+// Korakot held our bill next to the restaurant till's and ours was roughly a
+// third smaller with plain item lines (8 Sep). These are the restaurant's own
+// sizes; shrinking them again should fail here rather than on paper.
+{
+  const lines = tr.receiptLines(RECEIPT);
+  const sizeOf = (pred) => (lines.find(pred) || {}).size;
+  check('shop name is the biggest thing on the receipt', sizeOf((l) => l.text === 'Cha & Pinto Box' || l.center && l.bold && l.size >= 32) >= 32);
+  check('item lines are 27 and bold — the line a customer actually checks',
+    lines.filter((l) => /^\d+x /.test(l.text || '')).every((l) => l.size >= 27 && l.bold),
+    lines.filter((l) => /^\d+x /.test(l.text || '')).map((l) => ({ s: l.size, b: !!l.bold })));
+  check('TOTAL is 38', sizeOf((l) => l.text === 'TOTAL') === 38, sizeOf((l) => l.text === 'TOTAL'));
+  check('the money rows are 24', sizeOf((l) => /^Paid by /.test(l.text || '')) === 24);
+  check('nothing on the receipt is smaller than 20', lines.every((l) => l.blank || l.rule || (l.size || 0) >= 20),
+    lines.filter((l) => !l.blank && !l.rule && (l.size || 0) < 20).map((l) => `${l.text}:${l.size}`));
+}
+
 console.log('— prep ticket, Z report, test page');
 {
   const prep = decodeRaster(await ps.prepBytes({ shop_name: 'Cha & Pinto', printer_name: 'Kitchen', order_id: 42, fulfilment: 'collection', channel: 'instore', staff: 'Nok', created_at: new Date().toISOString(), customer_name: 'Nok S', items: [{ name: 'ผัดไทย Pad Thai', qty: 2, options: ['Large'] }], other_items: 1 }));
