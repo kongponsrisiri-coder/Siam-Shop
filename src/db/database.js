@@ -425,6 +425,38 @@ async function initDB() {
       )
     `);
 
+    // SIAMSHOP-CHAT-001 — every shopping-assistant conversation is kept, and a
+    // person can take one over. A shop needs the record for the same reasons it
+    // keeps orders: to see what customers asked for, and to step in when the
+    // assistant is not helping (Korakot, 8 Sep).
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS chat_sessions (
+        id              SERIAL PRIMARY KEY,
+        shop_id         INTEGER NOT NULL REFERENCES shops(id) ON DELETE CASCADE,
+        session_key     VARCHAR(64) NOT NULL,
+        customer_name   VARCHAR(200),
+        customer_email  VARCHAR(200),
+        mode            VARCHAR(10) NOT NULL DEFAULT 'ai',
+        staff           VARCHAR(120),
+        taken_over_at   TIMESTAMPTZ,
+        last_message_at TIMESTAMPTZ DEFAULT NOW(),
+        created_at      TIMESTAMPTZ DEFAULT NOW(),
+        UNIQUE (shop_id, session_key)
+      )
+    `);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS chat_messages (
+        id         SERIAL PRIMARY KEY,
+        session_id INTEGER NOT NULL REFERENCES chat_sessions(id) ON DELETE CASCADE,
+        role       VARCHAR(12) NOT NULL,
+        body       TEXT NOT NULL,
+        staff      VARCHAR(120),
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      )
+    `);
+    await pool.query(`CREATE INDEX IF NOT EXISTS chat_messages_session_idx ON chat_messages (session_id, id)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS chat_sessions_shop_idx ON chat_sessions (shop_id, last_message_at DESC)`);
+
     // SIAMSHOP-PRINTERS-001 — shop-wide printers with jobs + exactly-once prep tickets.
     await pool.query(`
       CREATE TABLE IF NOT EXISTS printers (

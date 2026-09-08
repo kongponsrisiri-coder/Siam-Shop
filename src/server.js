@@ -25,6 +25,7 @@ const prepTickets = require('./services/prepTickets'); // SIAMSHOP-PRINTERS-001
 if (process.env.SIAMSHOP_FAKE_EMAIL === '1') { crm.useFakeTransport(); console.log('[crm] FAKE email transport (test rig)'); }
 const carriers = require('./services/carriers');
 const assistant = require('./services/assistantService');
+const chatLog = require('./services/chatLog'); // SIAMSHOP-CHAT-001
 const availability = require('./services/availability');
 
 const app = express();
@@ -133,6 +134,8 @@ const ROLE_ALLOW = {
     ['*', /^\/api\/stock\/(receive|stocktake|goods-in-batch|scan-invoice|movements)$/], ['GET', /^\/api\/staff\/me$/], ['POST', /^\/api\/staff\/change-pin$/],
     ['*', /^\/api\/till\/(\/|$)/], ['*', /^\/api\/till\/session(\/|$)/], ['POST', /^\/api\/till\/void$/], ['*', /^\/api\/till\/customers$/], ['GET', /^\/api\/printers$/], ['*', /^\/api\/prep\/(print-queue|tickets)(\/|$)/], ['POST', /^\/api\/printers\/\d+\/test-result$/], ['GET', /^\/api\/till\/sessions(\/|$)/],
     ['POST', /^\/api\/admin\/orders\/\d+\/(ready|collected|dispatch|label-printed|refund)$/], ['GET', /^\/api\/admin\/orders\/\d+\/refunds$/],
+    // Shop-floor staff answer customer chats; waiting for a manager defeats the point (SIAMSHOP-CHAT-001).
+    ['*', /^\/api\/admin\/chats(\/|$)/],
   ],
   prep: [
     ['GET', /^\/api\/admin\/me$/], ['*', /^\/api\/prep(\/|$)/], ['GET', /^\/api\/staff\/me$/], ['POST', /^\/api\/staff\/change-pin$/], ['GET', /^\/api\/printers$/],
@@ -1103,6 +1106,73 @@ app.get('/api/settings', async (req, res) => {
   }
 });
 
+// ---------------------------------------------------------------------------
+// Shopping-assistant conversations (SIAMSHOP-CHAT-001) — the record, and taking
+// one over. Any signed-in staff can read and answer; a shop floor needs to be
+// able to step in without finding a manager.
+// ---------------------------------------------------------------------------
+app.get('/api/admin/chats', requireAuth, async (req, res) => {
+  try {
+    const shopId = await resolveShopId(req);
+    if (!shopId) return res.status(404).json({ error: 'Shop not found' });
+    const sessions = await chatLog.listSessions(pool, shopId, { limit: req.query.limit, cursor: req.query.before || null });
+    res.json({ sessions });
+  } catch (err) {
+    console.error('[admin/chats]', err.message);
+    res.status(500).json({ error: 'Failed to load conversations' });
+  }
+});
+app.get('/api/admin/chats/:id', requireAuth, async (req, res) => {
+  try {
+    const shopId = await resolveShopId(req);
+    if (!shopId) return res.status(404).json({ error: 'Shop not found' });
+    const chat = await chatLog.transcript(pool, shopId, req.params.id);
+    if (!chat) return res.status(404).json({ error: 'Conversation not found' });
+    res.json(chat);
+  } catch (err) {
+    console.error('[admin/chats/:id]', err.message);
+    res.status(500).json({ error: 'Failed to load the conversation' });
+  }
+});
+// Take over, or hand back. Recorded in the transcript so it reads as a handover
+// rather than the assistant suddenly changing voice.
+app.post('/api/admin/chats/:id/mode', requireAuth, async (req, res) => {
+  try {
+    const shopId = await resolveShopId(req);
+    if (!shopId) return res.status(404).json({ error: 'Shop not found' });
+    const mode = String(req.body?.mode || '');
+    if (!chatLog.MODES.includes(mode)) return res.status(400).json({ error: "mode must be 'ai' or 'human'" });
+    const who = req.auth?.name || req.auth?.staff || 'Staff';
+    const chat = await chatLog.setMode(pool, shopId, req.params.id, mode, who);
+    if (!chat) return res.status(404).json({ error: 'Conversation not found' });
+    await chatLog.addMessage(pool, chat.id, 'staff',
+      mode === 'human' ? `${who} joined the chat.` : `${who} handed the chat back to the assistant.`, who);
+    res.json(chat);
+  } catch (err) {
+    console.error('[admin/chats mode]', err.message);
+    res.status(500).json({ error: 'Failed to change who is answering' });
+  }
+});
+app.post('/api/admin/chats/:id/reply', requireAuth, async (req, res) => {
+  try {
+    const shopId = await resolveShopId(req);
+    if (!shopId) return res.status(404).json({ error: 'Shop not found' });
+    const body = String(req.body?.body || '').trim();
+    if (!body) return res.status(400).json({ error: 'Write something to send' });
+    const chat = await chatLog.transcript(pool, shopId, req.params.id);
+    if (!chat) return res.status(404).json({ error: 'Conversation not found' });
+    // Replying is taking over: otherwise the next customer message would get an
+    // assistant answer on top of the person's.
+    const who = req.auth?.name || req.auth?.staff || 'Staff';
+    if (chat.mode !== 'human') await chatLog.setMode(pool, shopId, chat.id, 'human', who);
+    const message = await chatLog.addMessage(pool, chat.id, 'staff', body, who);
+    res.status(201).json(message);
+  } catch (err) {
+    console.error('[admin/chats reply]', err.message);
+    res.status(500).json({ error: 'Failed to send' });
+  }
+});
+
 // Rename the shop (manager). The name is what the storefront banner, receipts,
 // prep tickets and order emails all say, and until now it was frozen at
 // whatever was typed at sign-up (Korakot, 7 Sep). The slug is deliberately NOT
@@ -1205,9 +1275,6 @@ app.post('/api/delivery-quote', async (req, res) => {
 // what's already in the customer's basket so it won't add duplicates.
 app.post('/api/assistant', lookupLimiter, async (req, res) => {
   try {
-    if (!assistant.isConfigured()) {
-      return res.status(503).json({ error: 'The assistant is not available right now.' });
-    }
     const shopId = await resolveShopId(req);
     if (!shopId) return res.status(404).json({ error: 'Shop not found' });
 
@@ -1223,7 +1290,34 @@ app.post('/api/assistant', lookupLimiter, async (req, res) => {
     const { rows: shopRows } = await pool.query(`SELECT name FROM shops WHERE id = $1`, [shopId]);
     const shopName = shopRows[0]?.name || 'SiamShop';
     const basket = Array.isArray(req.body?.basket) ? req.body.basket : [];
+
+    // Keep the conversation (SIAMSHOP-CHAT-001). The session key comes from the
+    // customer's browser and is only ever an opaque label.
+    const msgs = Array.isArray(req.body?.messages) ? req.body.messages : [];
+    const lastFromCustomer = [...msgs].reverse().find((m) => m && m.role === 'user');
+    let session = null;
+    try {
+      session = await chatLog.ensureSession(pool, shopId, req.body?.session, req.body?.customer || {});
+      if (session && lastFromCustomer) await chatLog.addMessage(pool, session.id, 'customer', lastFromCustomer.content);
+    } catch (e) { console.warn('[chat] could not record the message:', e.message); }
+
+    // A person has this conversation — the assistant stays out of it. The
+    // customer's widget polls for the staff reply.
+    if (session && session.mode === 'human') {
+      return res.json({ reply: '', add: [], handled_by: 'human', session_id: session.id, staff: session.staff || null });
+    }
+
+    // Only now does the AI matter. A shop with no key still keeps the record and
+    // can still answer by hand — refusing before this point lost the customer's
+    // question and broke a conversation a person was already having.
+    if (!assistant.isConfigured()) {
+      return res.status(503).json({ error: 'The assistant is not available right now.', session_id: session ? session.id : null });
+    }
     const { reply, add } = await assistant.chat({ messages: req.body?.messages, products, settings, shopName, basket });
+    if (session) {
+      try { await chatLog.addMessage(pool, session.id, 'assistant', reply); }
+      catch (e) { console.warn('[chat] could not record the reply:', e.message); }
+    }
 
     const inBasket = new Set(basket.map((b) => Number(b.id ?? b.product_id)).filter(Boolean));
     const byId = new Map(products.map((p) => [p.id, p]));
@@ -1235,10 +1329,28 @@ app.post('/api/assistant', lookupLimiter, async (req, res) => {
       });
     // Items with option groups (size/toppings) open the picker client-side.
     await attachOptionGroups(items);
-    res.json({ reply, add: items });
+    res.json({ reply, add: items, session_id: session ? session.id : null });
   } catch (err) {
     console.error('[assistant]', err.message);
     res.status(500).json({ error: 'The assistant had a problem — please try again.' });
+  }
+});
+
+// New messages in a conversation, for the customer's widget: it is how a staff
+// reply reaches the shopper. Rate-limited like every other public lookup, and
+// scoped to the session key the browser already holds, so one shopper's key
+// cannot read another's chat.
+app.get('/api/assistant/messages', lookupLimiter, async (req, res) => {
+  try {
+    const shopId = await resolveShopId(req);
+    if (!shopId) return res.status(404).json({ error: 'Shop not found' });
+    const session = await chatLog.ensureSession(pool, shopId, req.query.session);
+    if (!session) return res.status(400).json({ error: 'Missing session' });
+    const messages = await chatLog.messagesAfter(pool, session.id, req.query.after);
+    res.json({ mode: session.mode, staff: session.staff || null, messages });
+  } catch (err) {
+    console.error('[assistant messages]', err.message);
+    res.status(500).json({ error: 'Could not load the conversation' });
   }
 });
 

@@ -94,8 +94,16 @@ export const api = {
   deliveryQuote: (postcode) =>
     request('/api/delivery-quote', { method: 'POST', body: { postcode } }),
   pickupSlots: () => request('/api/pickup-slots'),
-  assistant: (messages, basket) =>
-    request('/api/assistant', { method: 'POST', body: { messages, basket } }),
+  assistant: (messages, basket, session) =>
+    request('/api/assistant', { method: 'POST', body: { messages, basket, session } }),
+  // Anything said in this conversation since `after` — how a staff reply
+  // reaches the shopper (SIAMSHOP-CHAT-001).
+  assistantMessages: (session, after = 0) =>
+    request(`/api/assistant/messages?session=${encodeURIComponent(session)}&after=${Number(after) || 0}`),
+  adminChats: () => request('/api/admin/chats', { authed: true }),
+  adminChat: (id) => request(`/api/admin/chats/${id}`, { authed: true }),
+  adminChatMode: (id, mode) => request(`/api/admin/chats/${id}/mode`, { method: 'POST', body: { mode }, authed: true }),
+  adminChatReply: (id, body) => request(`/api/admin/chats/${id}/reply`, { method: 'POST', body: { body }, authed: true }),
   checkoutSession: (body) =>
     request('/api/checkout/session', { method: 'POST', body }),
   createOrder: (body) => request('/api/orders', { method: 'POST', body }),
